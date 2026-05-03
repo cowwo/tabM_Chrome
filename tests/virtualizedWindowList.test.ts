@@ -17,6 +17,7 @@ import {
 } from "../src/sidepanel/components/listUtils";
 import {
   buildDragCommand,
+  buildFallbackDragCommand,
   createDragSource,
   createSelectedTabsDragSource,
   resolveDropTarget
@@ -522,7 +523,13 @@ describe("listDrag helpers", () => {
         targetRow: makeTabRow({ tab: makeTab({ id: 12, index: 4, groupId: 5 }) }),
         pointerRatio: 0.5
       })
-    ).toBeNull();
+    ).toEqual({
+      rowKey: "group-5",
+      targetWindowId: 1,
+      targetIndex: 5,
+      targetGroupId: null,
+      indicator: "after"
+    });
   });
 
   it("builds drag commands and normalizes intra-window indices", () => {
@@ -698,60 +705,37 @@ describe("listDrag helpers", () => {
     });
   });
 
-  it("normalizes same-window group target index and skips no-op group moves", () => {
-    expect(
-      buildDragCommand({
-        source: {
-          kind: "group",
-          rowKey: "group-9",
-          groupId: 9,
-          windowId: 1,
-          tabIds: [30, 31, 32],
-          firstTabIndex: 4,
-          title: "Group 9",
-          color: "cyan",
-          collapsed: false
-        },
-        target: {
-          rowKey: "tab-90",
-          targetWindowId: 1,
-          targetIndex: 10,
-          targetGroupId: null,
-          indicator: "after"
-        }
-      })
-    ).toEqual({
-      type: "group/move",
-      groupId: 9,
-      tabIds: [30, 31, 32],
-      targetWindowId: 1,
-      targetIndex: 7,
-      title: "Group 9",
-      color: "cyan",
-      collapsed: false
+  it("reuses the last resolved drop target when drop lands on a gap", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    const lastTarget = resolveDropTarget({
+      source,
+      targetRow: makeTabRow({ tab: makeTab({ id: 2, index: 3 }) }),
+      pointerRatio: 0.9
     });
 
-    expect(
-      buildDragCommand({
-        source: {
-          kind: "group",
-          rowKey: "group-9",
-          groupId: 9,
-          windowId: 1,
-          tabIds: [30, 31, 32],
-          firstTabIndex: 4,
-          title: "Group 9",
-          color: "cyan",
-          collapsed: false
-        },
-        target: {
-          rowKey: "tab-91",
-          targetWindowId: 1,
-          targetIndex: 4,
-          targetGroupId: null,
-          indicator: "before"
-        }
-      })
-    ).toBeNull();
+    if (!lastTarget) {
+      throw new Error("expected lastTarget");
+    }
+
+    expect(buildFallbackDragCommand({ source, lastTarget })).toEqual({
+      type: "tab/move",
+      tabId: 1,
+      targetWindowId: 1,
+      targetIndex: 3,
+      targetGroupId: null
+    });
+  });
+
+  it("does not create a fallback command when there is no last resolved target", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    expect(buildFallbackDragCommand({ source, lastTarget: null })).toBeNull();
   });
 });

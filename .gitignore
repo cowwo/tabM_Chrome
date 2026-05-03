@@ -25,10 +25,17 @@ test-results/
 
 # Claude
 .claude/
+.worktrees/
 
 # Documentation
 docs/
 SPEC.md
+
+# Conversation logs
+logs/
+
+# Public source assets (copied to dist/ during build)
+public/
 
 # Icon source files
 icon/

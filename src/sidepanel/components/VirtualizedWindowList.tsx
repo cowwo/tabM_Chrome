@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { translate, type SupportedLocale } from "../../shared/i18n";
 import type { PanelRow, TabDisplaySize, WindowRenderSection } from "../../shared/types";
 import type { DragSource, DropTarget } from "./listDrag";
-import { buildDragCommand, createDragSource, createSelectedTabsDragSource, resolveDropTarget } from "./listDrag";
+import { buildDragCommand, buildFallbackDragCommand, createDragSource, createSelectedTabsDragSource, resolveDropTarget } from "./listDrag";
 import type { HoveredTabPreview } from "./listRows";
 import { RowShell } from "./listRows";
 import {
@@ -112,6 +112,7 @@ export function VirtualizedWindowList({
   const [bottomSpacerHeight, setBottomSpacerHeight] = useState(0);
   const [dragSource, setDragSource] = useState<DragSource | null>(null);
   dragSourceRef.current = dragSource;
+  const lastResolvedDropTargetRef = useRef<DropTarget | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [windowStickyOffset, setWindowStickyOffset] = useState(0);
   const [measuredWindowHeaderNode, setMeasuredWindowHeaderNode] = useState<HTMLDivElement | null>(null);
@@ -388,6 +389,7 @@ export function VirtualizedWindowList({
   }, [scrollContainerRef]);
 
   const clearDragState = useCallback((): void => {
+    lastResolvedDropTargetRef.current = null;
     setDragSource(null);
     setDropTarget(null);
   }, []);
@@ -431,6 +433,8 @@ export function VirtualizedWindowList({
 
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", row.key);
+    dragSourceRef.current = source;
+    lastResolvedDropTargetRef.current = null;
     setDragSource(source);
     setDropTarget(null);
   }, [disabled, handleClearSelection]);
@@ -448,11 +452,14 @@ export function VirtualizedWindowList({
     });
 
     if (!target) {
+      event.preventDefault();
+      setDropTarget(null);
       return;
     }
 
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+    lastResolvedDropTargetRef.current = target;
     setDropTarget((current) =>
       current
       && current.rowKey === target.rowKey
@@ -476,21 +483,29 @@ export function VirtualizedWindowList({
       targetRow: row,
       pointerRatio: getPointerRatio(event)
     });
-    if (!target) {
+
+    const command = target
+      ? buildDragCommand({
+          source: currentDragSource,
+          target
+        })
+      : buildFallbackDragCommand({
+          source: currentDragSource,
+          lastTarget: lastResolvedDropTargetRef.current
+        });
+
+    if (!target && !command) {
       clearDragState();
       return;
     }
 
     event.preventDefault();
-    const command = buildDragCommand({
-      source: currentDragSource,
-      target
-    });
     onTraceEventRef.current?.("list/drop", {
       rowKey: row.key,
       rowKind: row.kind,
       dragSource: currentDragSource,
       target,
+      fallbackTarget: target == null ? lastResolvedDropTargetRef.current : null,
       command
     });
     clearDragState();

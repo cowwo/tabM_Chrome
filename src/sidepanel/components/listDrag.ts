@@ -161,7 +161,16 @@ export function resolveDropTarget(params: {
   }
 
   if (source.kind === "group" && normalizeGroupId(targetRow.tab.groupId) === source.groupId) {
-    return null;
+    return {
+      rowKey: source.rowKey,
+      targetWindowId: source.windowId,
+      targetIndex:
+        pointerRatio < 0.5
+          ? source.firstTabIndex
+          : source.firstTabIndex + source.tabIds.length,
+      targetGroupId: null,
+      indicator: pointerRatio < 0.5 ? "before" : "after"
+    };
   }
 
   return {
@@ -263,6 +272,39 @@ export function buildDragCommand(params: {
   };
 }
 
+export function buildFallbackDragCommand(params: {
+  source: DragSource;
+  lastTarget: DropTarget | null;
+}):
+  | {
+      type: "tab/move";
+      tabId: number;
+      targetWindowId: number;
+      targetIndex: number;
+      targetGroupId: number | null;
+    }
+  | {
+      type: "tabs/move";
+      tabIds: number[];
+      targetWindowId: number;
+      targetIndex: number;
+      targetGroupId: number | null;
+    }
+  | {
+      type: "group/move";
+      groupId: number;
+      tabIds: number[];
+      targetWindowId: number;
+      targetIndex: number;
+      title: string;
+      color: chrome.tabGroups.ColorEnum;
+      collapsed: boolean;
+    }
+  | null {
+  const { source, lastTarget } = params;
+  return lastTarget == null ? null : buildDragCommand({ source, target: lastTarget });
+}
+
 function normalizeGroupId(groupId: number): number | null {
   return groupId === NO_TAB_GROUP_ID ? null : groupId;
 }
@@ -287,7 +329,8 @@ function normalizeTargetIndex(params: {
     return targetIndex;
   }
 
-  return Math.max(0, targetIndex - 1);
+  const adjusted = Math.max(0, targetIndex - 1);
+  return adjusted === sourceIndex ? sourceIndex + 1 : adjusted;
 }
 
 function normalizeGroupTargetIndex(params: {
@@ -299,9 +342,10 @@ function normalizeGroupTargetIndex(params: {
 }): number {
   const { sourceWindowId, sourceFirstTabIndex, sourceTabCount, targetWindowId, targetIndex } = params;
 
-  if (sourceWindowId !== targetWindowId || sourceFirstTabIndex >= targetIndex) {
-    return Math.max(0, targetIndex);
+  // 同窗口内且目标位置在源位置之后时，需要减去源组占用的 tab 数量
+  if (sourceWindowId === targetWindowId && targetIndex > sourceFirstTabIndex) {
+    return Math.max(0, targetIndex - sourceTabCount);
   }
 
-  return Math.max(0, targetIndex - sourceTabCount);
+  return Math.max(0, targetIndex);
 }

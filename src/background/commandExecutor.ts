@@ -180,12 +180,45 @@ export async function executeTabCommand(
       assertMovableTabs(tabs);
 
       const targetIndex = normalizeMultiTabTargetIndex(tabs, command.targetWindowId, command.targetIndex);
-      const tabMovePlan = buildSequentialTabMovePlan(command.tabIds, command.targetWindowId, targetIndex);
-      for (const move of tabMovePlan) {
-        await chromeApi.tabs.move(move.tabId, {
-          windowId: move.targetWindowId,
-          index: move.targetIndex
-        });
+      const isSameWindow = tabs.every((tab) => tab.windowId === command.targetWindowId);
+
+      try {
+        if (isSameWindow) {
+          for (const tabId of command.tabIds) {
+            await chromeApi.tabs.move(tabId, {
+              windowId: command.targetWindowId,
+              index: -1
+            });
+          }
+
+          const movedTabs = await getExistingTabs(command.tabIds, chromeApi);
+          const sortedMovedTabs = movedTabs
+            .filter((tab): tab is ExistingTab & { id: number; index: number } => tab.id != null && tab.index != null)
+            .sort((left, right) => left.index - right.index);
+
+          for (const [offset, tab] of sortedMovedTabs.entries()) {
+            const desiredIndex = targetIndex + offset;
+            if (tab.index !== desiredIndex) {
+              await chromeApi.tabs.move(tab.id, {
+                windowId: command.targetWindowId,
+                index: desiredIndex
+              });
+            }
+          }
+        } else {
+          await chromeApi.tabs.move(command.tabIds, {
+            windowId: command.targetWindowId,
+            index: targetIndex
+          });
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("No tab with id")) {
+          return buildWindowResult(
+            tabs.map((tab) => tab.windowId),
+            command.targetWindowId
+          );
+        }
+        throw error;
       }
 
       if (command.targetGroupId == null) {
@@ -219,16 +252,16 @@ export async function executeTabCommand(
       }
       assertMovableTabs(tabs);
 
-      await chromeApi.tabs.move(command.tabIds, {
-        windowId: command.targetWindowId,
-        index: command.targetIndex
-      });
+      const isCrossWindow = group.windowId !== command.targetWindowId;
 
-      if (group.windowId !== command.targetWindowId) {
+      if (isCrossWindow) {
+        await chromeApi.tabs.move(command.tabIds, {
+          windowId: command.targetWindowId,
+          index: command.targetIndex
+        });
+
         const nextGroupId = await chromeApi.tabs.group({
-          createProperties: {
-            windowId: command.targetWindowId
-          },
+          createProperties: { windowId: command.targetWindowId },
           tabIds: command.tabIds
         });
 
@@ -237,6 +270,42 @@ export async function executeTabCommand(
           color: command.color,
           collapsed: command.collapsed
         });
+      } else {
+        // 同窗口移动：先全部移到末尾，再从末尾移到目标位置
+        // 避免逐一移动到相同下标时，向下拖动场景产生的索引偏移
+        for (const tabId of command.tabIds) {
+          await chromeApi.tabs.move(tabId, {
+            windowId: command.targetWindowId,
+            index: -1
+          });
+        }
+
+        const movedTabs = await getExistingTabs(command.tabIds, chromeApi);
+        const tabsWithIndex = movedTabs.filter((t): t is { id: number; index: number; windowId: number } => t.id != null && t.index != null);
+        const sortedMoved = [...tabsWithIndex].sort((a, b) => a.index - b.index);
+        for (let i = 0; i < sortedMoved.length; i++) {
+          const desired = command.targetIndex + i;
+          if (sortedMoved[i].index !== desired) {
+            await chromeApi.tabs.move(sortedMoved[i].id, {
+              windowId: command.targetWindowId,
+              index: desired
+            });
+          }
+        }
+
+        // 修复泄露的标签
+        const afterMove = await getExistingTabs(command.tabIds, chromeApi);
+        const leakedIds = afterMove
+          .filter((tab) => (tab.groupId ?? -1) !== command.groupId)
+          .map((tab) => tab.id)
+          .filter((id): id is number => id != null);
+
+        if (leakedIds.length > 0) {
+          await chromeApi.tabs.group({
+            groupId: command.groupId,
+            tabIds: leakedIds
+          });
+        }
       }
 
       return buildWindowResult(
@@ -312,22 +381,6 @@ function normalizeMultiTabTargetIndex(
       targetIndex
     )
   );
-}
-
-function buildSequentialTabMovePlan(
-  tabIds: readonly number[],
-  targetWindowId: number,
-  targetIndex: number
-): Array<{
-  tabId: number;
-  targetWindowId: number;
-  targetIndex: number;
-}> {
-  return tabIds.map((tabId, offset) => ({
-    tabId,
-    targetWindowId,
-    targetIndex: targetIndex + offset
-  }));
 }
 
 function buildWindowResult(

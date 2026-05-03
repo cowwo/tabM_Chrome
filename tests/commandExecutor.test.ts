@@ -279,17 +279,9 @@ describe("commandExecutor", () => {
       toChromeApi(mocks)
     );
 
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, 7, {
+    expect(mocks.tabsMove).toHaveBeenCalledWith([7, 8, 9], {
       windowId: 4,
       index: 4
-    });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 8, {
-      windowId: 4,
-      index: 5
-    });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 9, {
-      windowId: 4,
-      index: 6
     });
     expect(mocks.tabsGroup).toHaveBeenCalledWith({
       groupId: 88,
@@ -298,11 +290,14 @@ describe("commandExecutor", () => {
     expect(mocks.tabsUngroup).not.toHaveBeenCalled();
   });
 
-  it("normalizes multi-tab targetIndex only once in the executor", async () => {
+  it("keeps same-window multi-tab moves contiguous after normalization", async () => {
     const mocks = createChromeApiMocks();
     mocks.tabsGet
       .mockResolvedValueOnce({ id: 1, windowId: 4, index: 0, groupId: -1, pinned: false })
       .mockResolvedValueOnce({ id: 2, windowId: 4, index: 1, groupId: -1, pinned: false });
+    mocks.tabsGet
+      .mockResolvedValueOnce({ id: 1, windowId: 4, index: 5, groupId: -1, pinned: false })
+      .mockResolvedValueOnce({ id: 2, windowId: 4, index: 6, groupId: -1, pinned: false });
 
     await executeTabCommand(
       {
@@ -317,9 +312,17 @@ describe("commandExecutor", () => {
 
     expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, 1, {
       windowId: 4,
-      index: 2
+      index: -1
     });
     expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 2, {
+      windowId: 4,
+      index: -1
+    });
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 1, {
+      windowId: 4,
+      index: 2
+    });
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(4, 2, {
       windowId: 4,
       index: 3
     });
@@ -344,17 +347,9 @@ describe("commandExecutor", () => {
       toChromeApi(mocks)
     );
 
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, 7, {
+    expect(mocks.tabsMove).toHaveBeenCalledWith([7, 8, 9], {
       windowId: 4,
       index: 4
-    });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 8, {
-      windowId: 4,
-      index: 5
-    });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 9, {
-      windowId: 4,
-      index: 6
     });
     expect(mocks.tabsGroup).toHaveBeenCalledWith({
       groupId: 88,
@@ -362,7 +357,7 @@ describe("commandExecutor", () => {
     });
   });
 
-  it("moves a whole group within the same window without rebuilding it", async () => {
+  it("moves a whole group within the same window and re-adds only ungrouped tabs", async () => {
     const mocks = createChromeApiMocks();
     mocks.tabGroupsGet.mockResolvedValueOnce({
       id: 66,
@@ -371,9 +366,18 @@ describe("commandExecutor", () => {
       title: "66",
       windowId: 2
     });
+    // 1st query: tabs at [4,5]
     mocks.tabsGet
       .mockResolvedValueOnce({ id: 101, windowId: 2, index: 4, groupId: 66, pinned: false })
       .mockResolvedValueOnce({ id: 102, windowId: 2, index: 5, groupId: 66, pinned: false });
+    // 2nd query (after move to end): tabs at [6,7]
+    mocks.tabsGet
+      .mockResolvedValueOnce({ id: 101, windowId: 2, index: 6, groupId: 66, pinned: false })
+      .mockResolvedValueOnce({ id: 102, windowId: 2, index: 7, groupId: 66, pinned: false });
+    // 3rd query (after move to target, leak check): tab 102 leaked
+    mocks.tabsGet
+      .mockResolvedValueOnce({ id: 101, windowId: 2, index: 1, groupId: 66, pinned: false })
+      .mockResolvedValueOnce({ id: 102, windowId: 2, index: 2, groupId: -1, pinned: false });
 
     await executeTabCommand(
       {
@@ -389,17 +393,18 @@ describe("commandExecutor", () => {
       toChromeApi(mocks)
     );
 
-    expect(mocks.tabsMove).toHaveBeenCalledWith([101, 102], {
-      windowId: 2,
-      index: 1
+    // 先逐个移到末尾
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, 101, { windowId: 2, index: -1 });
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 102, { windowId: 2, index: -1 });
+    // 再逐个移到目标索引
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 101, { windowId: 2, index: 1 });
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(4, 102, { windowId: 2, index: 2 });
+    // 泄露修复
+    expect(mocks.tabsGroup).toHaveBeenCalledWith({
+      groupId: 66,
+      tabIds: [102]
     });
-    expect(mocks.tabsGroup).not.toHaveBeenCalled();
-    expect(mocks.tabGroupsUpdate).not.toHaveBeenCalledWith(
-      expect.any(Number),
-      expect.objectContaining({
-        title: "66"
-      })
-    );
+    expect(mocks.tabGroupsUpdate).not.toHaveBeenCalled();
   });
 
   it("moves a whole group across windows and rebuilds the group metadata", async () => {

@@ -1069,6 +1069,91 @@ test("开启详细日志后点击激活标签不会产生 move 事件", async ({
   await optionsPage.close();
 });
 
+test("拖拽到标签行间隙时不会静默丢失移动命令", async ({ extensionContext, sidepanelApi, sidepanelPage }) => {
+  const { extensionId } = await openSidepanelPage(extensionContext, "dist");
+  const optionsPage = await extensionContext.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: "domcontentloaded",
+    timeout: 10_000
+  });
+
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const pageA = await extensionContext.newPage();
+  const pageB = await extensionContext.newPage();
+  const pageC = await extensionContext.newPage();
+  await pageA.goto(createLocalPageUrl(`drag-gap-a-${uniqueSuffix}`));
+  await pageB.goto(createLocalPageUrl(`drag-gap-b-${uniqueSuffix}`));
+  await pageC.goto(createLocalPageUrl(`drag-gap-c-${uniqueSuffix}`));
+  await pageA.waitForLoadState("load");
+  await pageB.waitForLoadState("load");
+  await pageC.waitForLoadState("load");
+
+  await waitForSnapshot(
+    sidepanelApi,
+    (snapshot) => getSnapshotTabs(snapshot).filter((t) => t.title?.includes(`drag-gap-`) && t.title?.includes(uniqueSuffix)).length >= 3
+  );
+
+  await optionsPage.bringToFront();
+  await optionsPage.getByLabel("开启详细日志").check();
+  await sidepanelPage.bringToFront();
+  await expect(sidepanelPage.getByText("详细日志记录中")).toBeVisible();
+
+  const beforeSnapshot = await sidepanelApi.getSnapshot();
+  const dragATitle = `page-drag-gap-a-${uniqueSuffix}`;
+  const dragBTitle = `page-drag-gap-b-${uniqueSuffix}`;
+  const dragCTitle = `page-drag-gap-c-${uniqueSuffix}`;
+  const dragATab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === dragATitle);
+  expect(dragATab).toBeDefined();
+
+  const sourceRow = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${dragATitle}` });
+  const targetRowA = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${dragBTitle}` });
+  const targetRowB = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${dragCTitle}` });
+  await expect(sourceRow).toBeVisible();
+  await expect(targetRowA).toBeVisible();
+  await expect(targetRowB).toBeVisible();
+
+  const sourceBox = await sourceRow.boundingBox();
+  const targetBoxA = await targetRowA.boundingBox();
+  const targetBoxB = await targetRowB.boundingBox();
+  expect(sourceBox).not.toBeNull();
+  expect(targetBoxA).not.toBeNull();
+  expect(targetBoxB).not.toBeNull();
+
+  const gapY = targetBoxA!.y + targetBoxA!.height + Math.max((targetBoxB!.y - (targetBoxA!.y + targetBoxA!.height)) / 2, 1);
+  const sourceX = sourceBox!.x + 24;
+  const sourceY = sourceBox!.y + sourceBox!.height / 2;
+  const hoverX = targetBoxA!.x + 24;
+  const hoverY = targetBoxA!.y + targetBoxA!.height / 2;
+
+  await sidepanelPage.mouse.move(sourceX, sourceY);
+  await sidepanelPage.mouse.down();
+  await sidepanelPage.mouse.move(hoverX, hoverY, { steps: 8 });
+  await sidepanelPage.mouse.move(hoverX, gapY, { steps: 4 });
+  await sidepanelPage.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const snapshot = await sidepanelApi.getSnapshot();
+      const movedTab = dragATab == null ? null : snapshot.tabsById[dragATab.id];
+      return movedTab?.index;
+    })
+    .not.toBe(dragATab!.index);
+
+  const trace = await sidepanelApi.getTraceEntries();
+  const dragTrace = trace.filter((entry) =>
+    ["list/drag-start", "list/drop", "command/dispatch", "command/result"].includes(entry.event)
+  );
+
+  expect(dragTrace.some((entry) => entry.event === "list/drag-start")).toBe(true);
+  expect(
+    dragTrace.some(
+      (entry) => entry.event === "command/dispatch" && ["tab/move", "tabs/move", "group/move"].includes(String(entry.details.commandType ?? ""))
+    )
+  ).toBe(true);
+
+  await optionsPage.close();
+});
+
 test("侧边栏加载时无 JS 错误", async ({ sidepanelPage }) => {
   const errors: string[] = [];
   sidepanelPage.on("pageerror", (err) => {
