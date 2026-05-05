@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { translate, type SupportedLocale } from "../../shared/i18n";
 import type { PanelRow, TabDisplaySize, WindowRenderSection } from "../../shared/types";
+import type { DragHitTestRow } from "./dragHitTesting";
+import { findClosestDropTarget } from "./dragHitTesting";
+import {
+  calculateAutoScrollDelta,
+  deriveNextAutoScrollFrame
+} from "./dragAutoScroll";
 import type { DragSource, DropTarget } from "./listDrag";
-import { buildDragCommand, buildFallbackDragCommand, createDragSource, createSelectedTabsDragSource, resolveDropTarget } from "./listDrag";
+import { buildDragCommand, createDragSource, createSelectedTabsDragSource } from "./listDrag";
 import type { HoveredTabPreview } from "./listRows";
 import { RowShell } from "./listRows";
 import {
@@ -71,6 +77,392 @@ interface VirtualizedWindowListProps {
   }) => void;
 }
 
+const POINTER_DRAG_THRESHOLD_PX = 6;
+const POINTER_DRAG_AUTO_SCROLL_HOT_ZONE_PX = 60;
+const POINTER_DRAG_AUTO_SCROLL_MAX_STEP_PX = 24;
+
+type PointerPosition = {
+  x: number;
+  y: number;
+};
+
+type PointerDragSession =
+  | { phase: "idle" }
+  | {
+      phase: "pressing";
+      pointerId: number;
+      origin: PointerPosition;
+      source: DragSource;
+    }
+  | {
+      phase: "dragging";
+      pointerId: number;
+      origin: PointerPosition;
+      source: DragSource;
+      pointer: PointerPosition;
+      target: DropTarget | null;
+    };
+
+export function resolvePointerDragPhase(params: {
+  origin: PointerPosition;
+  pointer: PointerPosition;
+  threshold: number;
+}): "pressing" | "dragging" {
+  const deltaX = params.pointer.x - params.origin.x;
+  const deltaY = params.pointer.y - params.origin.y;
+  return Math.hypot(deltaX, deltaY) >= params.threshold ? "dragging" : "pressing";
+}
+
+export function shouldClearPointerDragSession(
+  session: PointerDragSession,
+  pointerId: number
+): boolean {
+  return session.phase !== "idle" && session.pointerId === pointerId;
+}
+
+export function resolvePointerCancelResult(params: {
+  session: PointerDragSession;
+  pointerId: number;
+}): {
+  nextSession: PointerDragSession;
+  wasCancelled: boolean;
+} {
+  return shouldClearPointerDragSession(params.session, params.pointerId)
+    ? {
+        nextSession: { phase: "idle" },
+        wasCancelled: true
+      }
+    : {
+        nextSession: params.session,
+        wasCancelled: false
+      };
+}
+
+export function resolvePointerDragAutoScrollLoopState(params: {
+  isDragging: boolean;
+  hasScheduledFrame: boolean;
+  delta: number;
+  didScroll: boolean;
+}): {
+  shouldScheduleFromPointerMove: boolean;
+  shouldScheduleNextFrame: boolean;
+} {
+  const shouldAutoScroll = params.isDragging && params.delta !== 0 && params.didScroll;
+  return {
+    shouldScheduleFromPointerMove: shouldAutoScroll && !params.hasScheduledFrame,
+    shouldScheduleNextFrame: shouldAutoScroll
+  };
+}
+
+export function resolvePointerDropOutcome(session: {
+  phase: PointerDragSession["phase"];
+  target?: DropTarget | null;
+  releasedWithinContainer?: boolean;
+}): "submit" | "cancel" {
+  return session.phase === "dragging"
+    && session.releasedWithinContainer !== false
+    && session.target != null
+    ? "submit"
+    : "cancel";
+}
+
+export function resolveDraggedRowKey(session: {
+  phase: PointerDragSession["phase"];
+  sourceRowKey?: string;
+}): string | null {
+  return session.phase === "dragging" ? session.sourceRowKey ?? null : null;
+}
+
+export function resolveRenderedDropIndicator(params: {
+  rowKey: string;
+  target: DropTarget | null;
+}): DropTarget["indicator"] | null {
+  return params.target?.rowKey === params.rowKey ? params.target.indicator : null;
+}
+
+export function resolvePointerUpResult(params: {
+  session: PointerDragSession;
+  releasedWithinContainer: boolean;
+  pointerId: number;
+}): {
+  nextSession: PointerDragSession;
+  shouldSuppressPostDragClick: boolean;
+  command:
+    | ReturnType<typeof buildDragCommand>
+    | null;
+} {
+  const { session, releasedWithinContainer, pointerId } = params;
+
+  if (!shouldClearPointerDragSession(session, pointerId)) {
+    return {
+      nextSession: session,
+      shouldSuppressPostDragClick: false,
+      command: null
+    };
+  }
+
+  const shouldSubmit = session.phase === "dragging"
+    && resolvePointerDropOutcome({
+      phase: session.phase,
+      target: session.target,
+      releasedWithinContainer
+    }) === "submit";
+
+  return {
+    nextSession: { phase: "idle" },
+    shouldSuppressPostDragClick: shouldSuppressPostDragClick(session),
+    command: shouldSubmit && session.target != null
+      ? buildDragCommand({
+          source: session.source,
+          target: session.target
+        })
+      : null
+  };
+}
+
+export function resolvePointerDragAutoScrollTickResult(params: {
+  session: PointerDragSession;
+  nextScrollTop: number;
+  shouldScheduleNextFrame: boolean;
+  nextTarget: DropTarget | null;
+}): {
+  nextSession: PointerDragSession;
+  nextScrollTop: number;
+  shouldApplyScroll: boolean;
+  shouldScheduleNextFrame: boolean;
+} {
+  if (params.session.phase !== "dragging" || !params.shouldScheduleNextFrame) {
+    return {
+      nextSession: params.session,
+      nextScrollTop: params.nextScrollTop,
+      shouldApplyScroll: false,
+      shouldScheduleNextFrame: false
+    };
+  }
+
+  return {
+    nextSession: {
+      ...params.session,
+      target: params.nextTarget
+    },
+    nextScrollTop: params.nextScrollTop,
+    shouldApplyScroll: true,
+    shouldScheduleNextFrame: true
+  };
+}
+
+export function shouldSuppressPostDragClick(session: {
+  phase: PointerDragSession["phase"];
+}): boolean {
+  return session.phase === "dragging";
+}
+
+export function isPointerWithinContainerBounds(params: {
+  pointer: PointerPosition;
+  containerRect: Pick<DOMRect, "left" | "right" | "top" | "bottom">;
+}): boolean {
+  const { pointer, containerRect } = params;
+  return pointer.x >= containerRect.left
+    && pointer.x <= containerRect.right
+    && pointer.y >= containerRect.top
+    && pointer.y <= containerRect.bottom;
+}
+
+export function collectVisibleDragRows(params: {
+  rows: readonly PanelRow[];
+  rowRefs: ReadonlyMap<string, HTMLDivElement>;
+}): DragHitTestRow[] {
+  return params.rows.flatMap((row) => {
+    const node = params.rowRefs.get(row.key);
+    return node == null
+      ? []
+      : [{
+          row,
+          rect: node.getBoundingClientRect(),
+          level: 0
+        }];
+  });
+}
+
+function resolveDragTargetFromPointer(params: {
+  source: DragSource;
+  pointer: PointerPosition;
+  rows: readonly PanelRow[];
+  rowRefs: ReadonlyMap<string, HTMLDivElement>;
+}): DropTarget | null {
+  return findClosestDropTarget({
+    source: params.source,
+    pointer: {
+      clientX: params.pointer.x,
+      clientY: params.pointer.y
+    },
+    rows: collectVisibleDragRows({
+      rows: params.rows,
+      rowRefs: params.rowRefs
+    })
+  });
+}
+
+function createPointerPosition(event: React.PointerEvent<HTMLElement>): PointerPosition {
+  return {
+    x: event.clientX,
+    y: event.clientY
+  };
+}
+
+function releasePointerCapture(event: React.PointerEvent<HTMLElement>): void {
+  if (!("hasPointerCapture" in event.currentTarget) || !("releasePointerCapture" in event.currentTarget)) {
+    return;
+  }
+
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+}
+
+function dispatchDragCommand(
+  command:
+    | {
+        type: "tab/move";
+        tabId: number;
+        targetWindowId: number;
+        targetIndex: number;
+        targetGroupId: number | null;
+      }
+    | {
+        type: "tabs/move";
+        tabIds: number[];
+        targetWindowId: number;
+        targetIndex: number;
+        targetGroupId: number | null;
+      }
+    | {
+        type: "group/move";
+        groupId: number;
+        tabIds: number[];
+        targetWindowId: number;
+        targetIndex: number;
+        title: string;
+        color: chrome.tabGroups.ColorEnum;
+        collapsed: boolean;
+      },
+  handlers: {
+    onMoveTab: VirtualizedWindowListProps["onMoveTab"];
+    onMoveTabs: VirtualizedWindowListProps["onMoveTabs"];
+    onMoveGroup: VirtualizedWindowListProps["onMoveGroup"];
+  }
+): void {
+  if (command.type === "tab/move") {
+    handlers.onMoveTab({
+      tabId: command.tabId,
+      targetWindowId: command.targetWindowId,
+      targetIndex: command.targetIndex,
+      targetGroupId: command.targetGroupId
+    });
+    return;
+  }
+
+  if (command.type === "tabs/move") {
+    handlers.onMoveTabs({
+      tabIds: command.tabIds,
+      targetWindowId: command.targetWindowId,
+      targetIndex: command.targetIndex,
+      targetGroupId: command.targetGroupId
+    });
+    return;
+  }
+
+  handlers.onMoveGroup({
+    groupId: command.groupId,
+    tabIds: command.tabIds,
+    targetWindowId: command.targetWindowId,
+    targetIndex: command.targetIndex,
+    title: command.title,
+    color: command.color,
+    collapsed: command.collapsed
+  });
+}
+
+export function shouldHandleSelectionGestureOnPointerDown(params: {
+  row: PanelRow;
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+}): boolean {
+  const { row, pointerGesture } = params;
+
+  return row.kind === "tab" && (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey);
+}
+
+export function shouldClearSelectionOnPointerDown(params: {
+  row: PanelRow;
+  selectedTabIds: ReadonlySet<number>;
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+}): boolean {
+  const { row, selectedTabIds, pointerGesture } = params;
+
+  if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
+    return false;
+  }
+
+  return row.kind === "tab" && !selectedTabIds.has(row.tab.id) && selectedTabIds.size > 0;
+}
+
+export function createPointerDragSource(params: {
+  row: PanelRow;
+  rows: PanelRow[];
+  selectedTabIds: ReadonlySet<number>;
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+}): DragSource | null {
+  const { row, rows, selectedTabIds, pointerGesture } = params;
+
+  if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
+    return null;
+  }
+
+  const selectedTabsSource =
+    row.kind === "tab" && selectedTabIds.has(row.tab.id)
+      ? createSelectedTabsDragSource({
+          row,
+          rows,
+          selectedTabIds
+        })
+      : null;
+
+  if (row.kind === "tab" && selectedTabIds.has(row.tab.id) && selectedTabIds.size > 1 && !selectedTabsSource) {
+    return null;
+  }
+
+  return selectedTabsSource ?? createDragSource(row);
+}
+
+export function shouldStartPointerDragSession(params: {
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+  source: DragSource | null;
+}): boolean {
+  const { pointerGesture, source } = params;
+
+  if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
+    return false;
+  }
+
+  return source != null;
+}
+
 export function VirtualizedWindowList({
   locale,
   tabDisplaySize,
@@ -104,20 +496,30 @@ export function VirtualizedWindowList({
   rowsRef.current = rows;
   const selectedTabIdsRef = useRef(selectedTabIds);
   selectedTabIdsRef.current = selectedTabIds;
-  const dragSourceRef = useRef<DragSource | null>(null);
   const pendingManualAnchorRef = useRef<{
     rowKey: string;
     previousRowTop: number;
   } | null>(null);
+  const autoScrollFrameRef = useRef<number | null>(null);
   const [bottomSpacerHeight, setBottomSpacerHeight] = useState(0);
-  const [dragSource, setDragSource] = useState<DragSource | null>(null);
-  dragSourceRef.current = dragSource;
-  const lastResolvedDropTargetRef = useRef<DropTarget | null>(null);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const [pointerDragSession, setPointerDragSession] = useState<PointerDragSession>({ phase: "idle" });
+  const pointerDragSessionRef = useRef<PointerDragSession>(pointerDragSession);
+  pointerDragSessionRef.current = pointerDragSession;
+  const draggedRowKey = resolveDraggedRowKey({
+    phase: pointerDragSession.phase,
+    sourceRowKey: pointerDragSession.phase === "dragging" ? pointerDragSession.source.rowKey : undefined
+  });
+  const dragTarget = pointerDragSession.phase === "dragging" ? pointerDragSession.target : null;
+  const getDropIndicator = useCallback(
+    (rowKey: string): DropTarget["indicator"] | null =>
+      resolveRenderedDropIndicator({ rowKey, target: dragTarget }),
+    [dragTarget]
+  );
   const [windowStickyOffset, setWindowStickyOffset] = useState(0);
   const [measuredWindowHeaderNode, setMeasuredWindowHeaderNode] = useState<HTMLDivElement | null>(null);
   const [locatePulseRowKey, setLocatePulseRowKey] = useState<string | null>(null);
   const previousHandledLocateRequestIdRef = useRef<number | null>(null);
+  const suppressPostDragClickRef = useRef(false);
   const activeRowKey = currentActiveTabId != null ? `tab-${currentActiveTabId}` : null;
   const activeRowKeyRef = useRef<string | null>(null);
   activeRowKeyRef.current = activeRowKey;
@@ -336,11 +738,10 @@ export function VirtualizedWindowList({
   }, [activeRowKey, hasActiveRowInList, rows, scrollContainerRef]);
 
   useEffect(() => {
-    if (dragSource && !rowKeySet.has(dragSource.rowKey)) {
-      setDragSource(null);
-      setDropTarget(null);
+    if (pointerDragSession.phase !== "idle" && !rowKeySet.has(pointerDragSession.source.rowKey)) {
+      setPointerDragSession({ phase: "idle" });
     }
-  }, [dragSource, rowKeySet]);
+  }, [pointerDragSession, rowKeySet]);
 
   useLayoutEffect(() => {
     if (!measuredWindowHeaderNode) {
@@ -388,144 +789,283 @@ export function VirtualizedWindowList({
     };
   }, [scrollContainerRef]);
 
-  const clearDragState = useCallback((): void => {
-    lastResolvedDropTargetRef.current = null;
-    setDragSource(null);
-    setDropTarget(null);
+  const stopAutoScroll = useCallback((): void => {
+    if (autoScrollFrameRef.current != null) {
+      window.cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
   }, []);
 
-  const handleDragStart = useCallback((row: PanelRow, event: React.DragEvent<HTMLElement>): void => {
-    if (disabled) {
-      event.preventDefault();
+  const scheduleAutoScroll = useCallback((): void => {
+    if (autoScrollFrameRef.current != null) {
+      return;
+    }
+
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) {
+      return;
+    }
+
+    const tick = () => {
+      autoScrollFrameRef.current = null;
+
+      const current = pointerDragSessionRef.current;
+      if (current.phase !== "dragging") {
+        return;
+      }
+
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const delta = calculateAutoScrollDelta({
+        pointerClientY: current.pointer.y,
+        containerTop: containerRect.top,
+        containerHeight: containerRect.height,
+        hotZoneSize: POINTER_DRAG_AUTO_SCROLL_HOT_ZONE_PX,
+        maxStep: POINTER_DRAG_AUTO_SCROLL_MAX_STEP_PX
+      });
+
+      const { nextScrollTop, didScroll } = deriveNextAutoScrollFrame({
+        currentScrollTop: scrollContainer.scrollTop,
+        maxScrollTop: Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight),
+        delta
+      });
+
+      const { shouldScheduleNextFrame } = resolvePointerDragAutoScrollLoopState({
+        isDragging: true,
+        hasScheduledFrame: false,
+        delta,
+        didScroll
+      });
+
+      const nextTarget = shouldScheduleNextFrame
+        ? resolveDragTargetFromPointer({
+            source: current.source,
+            pointer: current.pointer,
+            rows: rowsRef.current,
+            rowRefs: rowRefs.current
+          })
+        : current.target;
+
+      const tickResult = resolvePointerDragAutoScrollTickResult({
+        session: current,
+        nextScrollTop,
+        shouldScheduleNextFrame,
+        nextTarget
+      });
+
+      if (tickResult.shouldApplyScroll) {
+        scrollContainer.scrollTop = tickResult.nextScrollTop;
+        setPointerDragSession(tickResult.nextSession);
+      }
+
+      if (tickResult.shouldScheduleNextFrame) {
+        autoScrollFrameRef.current = window.requestAnimationFrame(tick);
+      }
+    };
+
+    autoScrollFrameRef.current = window.requestAnimationFrame(tick);
+  }, [scrollContainerRef]);
+
+  useEffect(() => stopAutoScroll, [stopAutoScroll]);
+
+  useEffect(() => {
+    if (pointerDragSession.phase !== "dragging") {
+      stopAutoScroll();
+      return;
+    }
+
+    scheduleAutoScroll();
+    return stopAutoScroll;
+  }, [pointerDragSession.phase, scheduleAutoScroll, stopAutoScroll]);
+
+  const handlePointerDown = useCallback((row: PanelRow, event: React.PointerEvent<HTMLElement>): void => {
+    if (disabled || event.button !== 0 || !event.isPrimary) {
+      return;
+    }
+
+    suppressPostDragClickRef.current = false;
+
+    const pointerGesture = {
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey
+    };
+
+    if (shouldHandleSelectionGestureOnPointerDown({
+      row,
+      pointerGesture
+    })) {
       return;
     }
 
     const currentSelectedTabIds = selectedTabIdsRef.current;
-    if (row.kind === "tab" && !currentSelectedTabIds.has(row.tab.id) && currentSelectedTabIds.size > 0) {
+    if (shouldClearSelectionOnPointerDown({
+      row,
+      selectedTabIds: currentSelectedTabIds,
+      pointerGesture
+    })) {
       handleClearSelection();
     }
 
-    const selectedTabsSource =
-      row.kind === "tab" && currentSelectedTabIds.has(row.tab.id)
-        ? createSelectedTabsDragSource({
-            row,
-            rows: rowsRef.current,
-            selectedTabIds: currentSelectedTabIds
-          })
-        : null;
-
-    if (row.kind === "tab" && currentSelectedTabIds.has(row.tab.id) && currentSelectedTabIds.size > 1 && !selectedTabsSource) {
-      event.preventDefault();
-      return;
-    }
-
-    const source = selectedTabsSource ?? createDragSource(row);
-    if (!source) {
-      event.preventDefault();
-      return;
-    }
-
-    onTraceEventRef.current?.("list/drag-start", {
-      rowKey: row.key,
-      rowKind: row.kind,
-      source
+    const source = createPointerDragSource({
+      row,
+      rows: rowsRef.current,
+      selectedTabIds: currentSelectedTabIds,
+      pointerGesture
     });
 
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", row.key);
-    dragSourceRef.current = source;
-    lastResolvedDropTargetRef.current = null;
-    setDragSource(source);
-    setDropTarget(null);
+    if (!shouldStartPointerDragSession({
+      source,
+      pointerGesture: {
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey
+      }
+    })) {
+      return;
+    }
+
+    const confirmedSource = source;
+    if (confirmedSource == null) {
+      return;
+    }
+
+    if ("setPointerCapture" in event.currentTarget) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+
+    setPointerDragSession({
+      phase: "pressing",
+      pointerId: event.pointerId,
+      origin: createPointerPosition(event),
+      source: confirmedSource
+    });
   }, [disabled, handleClearSelection]);
 
-  const handleDragOver = useCallback((row: PanelRow, event: React.DragEvent<HTMLElement>): void => {
-    const currentDragSource = dragSourceRef.current;
-    if (disabled || !currentDragSource) {
-      return;
-    }
 
-    const target = resolveDropTarget({
-      source: currentDragSource,
-      targetRow: row,
-      pointerRatio: getPointerRatio(event)
-    });
+  const handlePointerEnter = useCallback((_row: PanelRow, _event: React.PointerEvent<HTMLElement>): void => {
+    return;
+  }, []);
 
-    if (!target) {
-      event.preventDefault();
-      setDropTarget(null);
-      return;
-    }
+  const handlePointerMove = useCallback((_row: PanelRow, event: React.PointerEvent<HTMLElement>): void => {
+    setPointerDragSession((current) => {
+      if (current.phase === "idle" || current.pointerId !== event.pointerId) {
+        return current;
+      }
 
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    lastResolvedDropTargetRef.current = target;
-    setDropTarget((current) =>
-      current
-      && current.rowKey === target.rowKey
-      && current.indicator === target.indicator
-      && current.targetWindowId === target.targetWindowId
-      && current.targetIndex === target.targetIndex
-      && current.targetGroupId === target.targetGroupId
-        ? current
-        : target
-    );
-  }, [disabled]);
+      const pointer = createPointerPosition(event);
 
-  const handleDrop = useCallback((row: PanelRow, event: React.DragEvent<HTMLElement>): void => {
-    const currentDragSource = dragSourceRef.current;
-    if (disabled || !currentDragSource) {
-      return;
-    }
+      if (current.phase === "pressing") {
+        if (resolvePointerDragPhase({
+          origin: current.origin,
+          pointer,
+          threshold: POINTER_DRAG_THRESHOLD_PX
+        }) !== "dragging") {
+          return current;
+        }
 
-    const target = resolveDropTarget({
-      source: currentDragSource,
-      targetRow: row,
-      pointerRatio: getPointerRatio(event)
-    });
-
-    const command = target
-      ? buildDragCommand({
-          source: currentDragSource,
-          target
-        })
-      : buildFallbackDragCommand({
-          source: currentDragSource,
-          lastTarget: lastResolvedDropTargetRef.current
+        const target = resolveDragTargetFromPointer({
+          source: current.source,
+          pointer,
+          rows: rowsRef.current,
+          rowRefs: rowRefs.current
         });
 
-    if (!target && !command) {
-      clearDragState();
-      return;
-    }
+        return {
+          phase: "dragging",
+          pointerId: current.pointerId,
+          origin: current.origin,
+          source: current.source,
+          pointer,
+          target
+        };
+      }
 
-    event.preventDefault();
-    onTraceEventRef.current?.("list/drop", {
-      rowKey: row.key,
-      rowKind: row.kind,
-      dragSource: currentDragSource,
-      target,
-      fallbackTarget: target == null ? lastResolvedDropTargetRef.current : null,
-      command
+      const target = resolveDragTargetFromPointer({
+        source: current.source,
+        pointer,
+        rows: rowsRef.current,
+        rowRefs: rowRefs.current
+      });
+
+      return {
+        ...current,
+        pointer,
+        target
+      };
     });
-    clearDragState();
 
-    if (!command) {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) {
       return;
     }
 
-    if (command.type === "tab/move") {
-      handleMoveTabAction(command);
-      return;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const delta = calculateAutoScrollDelta({
+      pointerClientY: event.clientY,
+      containerTop: containerRect.top,
+      containerHeight: containerRect.height,
+      hotZoneSize: POINTER_DRAG_AUTO_SCROLL_HOT_ZONE_PX,
+      maxStep: POINTER_DRAG_AUTO_SCROLL_MAX_STEP_PX
+    });
+
+    const { shouldScheduleFromPointerMove } = resolvePointerDragAutoScrollLoopState({
+      isDragging: pointerDragSession.phase === "dragging" || resolvePointerDragPhase({
+        origin: pointerDragSession.phase === "pressing" ? pointerDragSession.origin : { x: event.clientX, y: event.clientY },
+        pointer: { x: event.clientX, y: event.clientY },
+        threshold: POINTER_DRAG_THRESHOLD_PX
+      }) === "dragging",
+      hasScheduledFrame: autoScrollFrameRef.current != null,
+      delta,
+      didScroll: true
+    });
+
+    if (shouldScheduleFromPointerMove) {
+      scheduleAutoScroll();
+    }
+  }, [pointerDragSession, scheduleAutoScroll, scrollContainerRef]);
+
+  const handlePointerUp = useCallback((_row: PanelRow, event: React.PointerEvent<HTMLElement>): void => {
+    stopAutoScroll();
+
+    const scrollContainer = scrollContainerRef.current;
+    const releasedWithinContainer = scrollContainer != null
+      && isPointerWithinContainerBounds({
+        pointer: createPointerPosition(event),
+        containerRect: scrollContainer.getBoundingClientRect()
+      });
+
+    const pointerUpResult = resolvePointerUpResult({
+      session: pointerDragSessionRef.current,
+      releasedWithinContainer,
+      pointerId: event.pointerId
+    });
+
+    setPointerDragSession(pointerUpResult.nextSession);
+    suppressPostDragClickRef.current = pointerUpResult.shouldSuppressPostDragClick;
+
+    if (pointerUpResult.command) {
+      dispatchDragCommand(pointerUpResult.command, {
+        onMoveTab: handleMoveTabAction,
+        onMoveTabs: handleMoveTabsAction,
+        onMoveGroup: handleMoveGroupAction
+      });
     }
 
-    if (command.type === "tabs/move") {
-      handleMoveTabsAction(command);
-      return;
-    }
+    releasePointerCapture(event);
+  }, [handleMoveGroupAction, handleMoveTabAction, handleMoveTabsAction, scrollContainerRef, stopAutoScroll]);
 
-    handleMoveGroupAction(command);
-  }, [clearDragState, disabled, handleMoveGroupAction, handleMoveTabAction, handleMoveTabsAction]);
+  const handlePointerCancel = useCallback((_row: PanelRow, event: React.PointerEvent<HTMLElement>): void => {
+    stopAutoScroll();
+
+    const pointerCancelResult = resolvePointerCancelResult({
+      session: pointerDragSessionRef.current,
+      pointerId: event.pointerId
+    });
+
+    setPointerDragSession(pointerCancelResult.nextSession);
+
+    releasePointerCapture(event);
+  }, [stopAutoScroll]);
 
   if (rows.length === 0) {
     return (
@@ -562,17 +1102,21 @@ export function VirtualizedWindowList({
         onClearSelection();
       }}
       onPointerLeave={() => onHoveredTabChange?.(null)}
+      onClickCapture={(event) => {
+        if (!suppressPostDragClickRef.current) {
+          return;
+        }
+
+        suppressPostDragClickRef.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onBlur={(event) => {
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
           return;
         }
 
         onHoveredTabChange?.(null);
-      }}
-      onDragEnd={clearDragState}
-      onDrop={(event) => {
-        event.preventDefault();
-        clearDragState();
       }}
     >
       <div className="stack-list">
@@ -599,11 +1143,13 @@ export function VirtualizedWindowList({
               onTogglePinned={handleTogglePinnedAction}
               onCloseTab={handleCloseTabAction}
               selectionMode={selectionMode}
-              isDragging={dragSource?.rowKey === section.windowRow.key}
-              dropIndicator={dropTarget?.rowKey === section.windowRow.key ? dropTarget.indicator : null}
-              onDragStart={handleDragStart}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
+              isDragging={draggedRowKey === section.windowRow.key}
+              dropIndicator={getDropIndicator(section.windowRow.key)}
+              onPointerDown={handlePointerDown}
+              onPointerEnter={handlePointerEnter}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
               extraClassName={getWindowSectionHeaderClassName({
                 measured: sectionIndex === 0
               })}
@@ -634,11 +1180,13 @@ export function VirtualizedWindowList({
                       onTogglePinned={handleTogglePinnedAction}
                       onCloseTab={handleCloseTabAction}
                       selectionMode={selectionMode}
-                      isDragging={dragSource?.rowKey === item.row.key}
-                      dropIndicator={dropTarget?.rowKey === item.row.key ? dropTarget.indicator : null}
-                      onDragStart={handleDragStart}
-                      onDragOver={handleDragOver}
-                      onDrop={handleDrop}
+                      isDragging={draggedRowKey === item.row.key}
+                      dropIndicator={getDropIndicator(item.row.key)}
+                      onPointerDown={handlePointerDown}
+                      onPointerEnter={handlePointerEnter}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={handlePointerUp}
+                      onPointerCancel={handlePointerCancel}
                       onHoveredTabChange={onHoveredTabChange}
                     />
                   ) : (
@@ -647,7 +1195,7 @@ export function VirtualizedWindowList({
                       className={`group-block group-block--${item.groupRow.color}${
                         item.groupRow.collapsed ? " group-block--collapsed" : ""
                       }${
-                        dragSource?.kind === "group" && dragSource.groupId === item.groupRow.groupId
+                        draggedRowKey === item.groupRow.key
                           ? " group-block--dragging"
                           : ""
                       }`}
@@ -670,11 +1218,13 @@ export function VirtualizedWindowList({
                         onTogglePinned={handleTogglePinnedAction}
                         onCloseTab={handleCloseTabAction}
                         selectionMode={selectionMode}
-                        isDragging={dragSource?.rowKey === item.groupRow.key}
-                        dropIndicator={dropTarget?.rowKey === item.groupRow.key ? dropTarget.indicator : null}
-                        onDragStart={handleDragStart}
-                        onDragOver={handleDragOver}
-                        onDrop={handleDrop}
+                        isDragging={draggedRowKey === item.groupRow.key}
+                        dropIndicator={getDropIndicator(item.groupRow.key)}
+                        onPointerDown={handlePointerDown}
+                        onPointerEnter={handlePointerEnter}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        onPointerCancel={handlePointerCancel}
                         onHoveredTabChange={onHoveredTabChange}
                       />
                       {!item.groupRow.collapsed || searchActive ? (
@@ -703,11 +1253,13 @@ export function VirtualizedWindowList({
                                 index === item.childRows.length - 1 ? " group-block__item--last" : ""
                               }`}
                               groupedTabColor={item.groupRow.color}
-                              isDragging={dragSource?.rowKey === row.key}
-                              dropIndicator={dropTarget?.rowKey === row.key ? dropTarget.indicator : null}
-                              onDragStart={handleDragStart}
-                              onDragOver={handleDragOver}
-                              onDrop={handleDrop}
+                              isDragging={draggedRowKey === row.key}
+                              dropIndicator={getDropIndicator(row.key)}
+                              onPointerDown={handlePointerDown}
+                              onPointerEnter={handlePointerEnter}
+                              onPointerMove={handlePointerMove}
+                              onPointerUp={handlePointerUp}
+                              onPointerCancel={handlePointerCancel}
                               onHoveredTabChange={onHoveredTabChange}
                             />
                           ))}
@@ -730,13 +1282,4 @@ export function VirtualizedWindowList({
       </div>
     </div>
   );
-}
-
-function getPointerRatio(event: React.DragEvent<HTMLElement>): number {
-  const rect = event.currentTarget.getBoundingClientRect();
-  if (rect.height <= 0) {
-    return 0.5;
-  }
-
-  return (event.clientY - rect.top) / rect.height;
 }

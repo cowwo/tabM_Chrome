@@ -184,12 +184,10 @@ export async function executeTabCommand(
 
       try {
         if (isSameWindow) {
-          for (const tabId of command.tabIds) {
-            await chromeApi.tabs.move(tabId, {
-              windowId: command.targetWindowId,
-              index: -1
-            });
-          }
+          await chromeApi.tabs.move(command.tabIds, {
+            windowId: command.targetWindowId,
+            index: -1
+          });
 
           const movedTabs = await getExistingTabs(command.tabIds, chromeApi);
           const sortedMovedTabs = movedTabs
@@ -255,6 +253,9 @@ export async function executeTabCommand(
       const isCrossWindow = group.windowId !== command.targetWindowId;
 
       if (isCrossWindow) {
+        // 先将标签移出组，避免 Chrome 跨窗口移动时自动创建新组导致标题冲突
+        await chromeApi.tabs.ungroup(command.tabIds);
+
         await chromeApi.tabs.move(command.tabIds, {
           windowId: command.targetWindowId,
           index: command.targetIndex
@@ -266,19 +267,17 @@ export async function executeTabCommand(
         });
 
         await chromeApi.tabGroups.update(nextGroupId, {
-          title: command.title,
+          title: command.title || undefined,
           color: command.color,
           collapsed: command.collapsed
         });
       } else {
         // 同窗口移动：先全部移到末尾，再从末尾移到目标位置
-        // 避免逐一移动到相同下标时，向下拖动场景产生的索引偏移
-        for (const tabId of command.tabIds) {
-          await chromeApi.tabs.move(tabId, {
-            windowId: command.targetWindowId,
-            index: -1
-          });
-        }
+        // 批量移动到末尾，减少 API 调用次数
+        await chromeApi.tabs.move(command.tabIds, {
+          windowId: command.targetWindowId,
+          index: -1
+        });
 
         const movedTabs = await getExistingTabs(command.tabIds, chromeApi);
         const tabsWithIndex = movedTabs.filter((t): t is { id: number; index: number; windowId: number } => t.id != null && t.index != null);

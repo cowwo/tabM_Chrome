@@ -39,9 +39,11 @@ export interface RowShellProps {
   onTogglePinned: (tabId: number, pinned: boolean) => void;
   onCloseTab: (tabId: number) => void;
   selectionMode: boolean;
-  onDragStart: (row: PanelRow, event: React.DragEvent<HTMLElement>) => void;
-  onDragOver: (row: PanelRow, event: React.DragEvent<HTMLElement>) => void;
-  onDrop: (row: PanelRow, event: React.DragEvent<HTMLElement>) => void;
+  onPointerDown: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerEnter: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerMove: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerUp: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerCancel: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
   extraClassName?: string;
   groupedTabColor?: chrome.tabGroups.ColorEnum;
   visuallyExpanded?: boolean;
@@ -69,12 +71,14 @@ function RowShellInner({
   onTogglePinned,
   onCloseTab,
   selectionMode,
-  onDragStart,
-  onDragOver,
-  onDrop,
+  onPointerDown,
+  onPointerEnter,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
   extraClassName = "",
-  groupedTabColor: _groupedTabColor,
-  visuallyExpanded: _visuallyExpanded = false,
+  groupedTabColor,
+  visuallyExpanded = false,
   isDragging = false,
   dropIndicator = null,
   onElementRefChange,
@@ -119,9 +123,13 @@ function RowShellInner({
         onTogglePinned={onTogglePinned}
         onCloseTab={onCloseTab}
         selectionMode={selectionMode}
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-        onDrop={onDrop}
+        onPointerDown={onPointerDown}
+        onPointerEnter={onPointerEnter}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        groupedTabColor={groupedTabColor}
+        visuallyExpanded={visuallyExpanded}
         onHoveredTabChange={onHoveredTabChange}
       />
     </div>
@@ -152,10 +160,13 @@ export function areRowShellPropsEqual(previous: RowShellProps, next: RowShellPro
     && previous.onActivateTab === next.onActivateTab
     && previous.onTogglePinned === next.onTogglePinned
     && previous.onCloseTab === next.onCloseTab
-    && previous.onDragStart === next.onDragStart
-    && previous.onDragOver === next.onDragOver
-    && previous.onDrop === next.onDrop
+    && previous.onPointerDown === next.onPointerDown
+    && previous.onPointerEnter === next.onPointerEnter
+    && previous.onPointerMove === next.onPointerMove
+    && previous.onPointerUp === next.onPointerUp
+    && previous.onPointerCancel === next.onPointerCancel
     && previous.onElementRefChange === next.onElementRefChange
+    && previous.onHoveredTabChange === next.onHoveredTabChange
   );
 }
 
@@ -178,9 +189,11 @@ function PanelListRow({
   onTogglePinned,
   onCloseTab,
   selectionMode,
-  onDragStart,
-  onDragOver,
-  onDrop,
+  onPointerDown,
+  onPointerEnter,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
   groupedTabColor,
   visuallyExpanded = false,
   onHoveredTabChange
@@ -205,9 +218,11 @@ function PanelListRow({
   onTogglePinned: (tabId: number, pinned: boolean) => void;
   onCloseTab: (tabId: number) => void;
   selectionMode: boolean;
-  onDragStart: (row: PanelRow, event: React.DragEvent<HTMLElement>) => void;
-  onDragOver: (row: PanelRow, event: React.DragEvent<HTMLElement>) => void;
-  onDrop: (row: PanelRow, event: React.DragEvent<HTMLElement>) => void;
+  onPointerDown: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerEnter: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerMove: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerUp: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
+  onPointerCancel: (row: PanelRow, event: React.PointerEvent<HTMLElement>) => void;
   groupedTabColor?: chrome.tabGroups.ColorEnum;
   visuallyExpanded?: boolean;
   onHoveredTabChange?: (preview: HoveredTabPreview | null) => void;
@@ -227,8 +242,10 @@ function PanelListRow({
           onCaptureManualToggleAnchor(row.key);
           onToggleWindow(row.windowId);
         }}
-        onDragOver={(event) => onDragOver(row, event)}
-        onDrop={(event) => onDrop(row, event)}
+        onPointerEnter={(event) => onPointerEnter(row, event)}
+        onPointerMove={(event) => onPointerMove(row, event)}
+        onPointerUp={(event) => onPointerUp(row, event)}
+        onPointerCancel={(event) => onPointerCancel(row, event)}
         aria-expanded={visuallyExpanded || !row.collapsed}
         disabled={disabled}
       >
@@ -259,10 +276,11 @@ function PanelListRow({
           onCaptureManualToggleAnchor(row.key);
           onToggleGroup(row.groupId, !row.collapsed);
         }}
-        draggable={!disabled}
-        onDragStart={(event) => onDragStart(row, event)}
-        onDragOver={(event) => onDragOver(row, event)}
-        onDrop={(event) => onDrop(row, event)}
+        onPointerDown={(event) => onPointerDown(row, event)}
+        onPointerEnter={(event) => onPointerEnter(row, event)}
+        onPointerMove={(event) => onPointerMove(row, event)}
+        onPointerUp={(event) => onPointerUp(row, event)}
+        onPointerCancel={(event) => onPointerCancel(row, event)}
         aria-expanded={visuallyExpanded || !row.collapsed}
         disabled={disabled}
       >
@@ -295,10 +313,14 @@ function PanelListRow({
         groupedTabColor,
         matchesSearch: row.matchesSearch
       }) + (tabDisabled ? " tab-row--disabled" : "")}
-      onPointerEnter={() => onHoveredTabChange?.(hoveredPreview)}
+      onPointerEnter={(event) => {
+        onPointerEnter(row, event);
+        onHoveredTabChange?.(hoveredPreview);
+      }}
+      onPointerMove={(event) => onPointerMove(row, event)}
+      onPointerUp={(event) => onPointerUp(row, event)}
+      onPointerCancel={(event) => onPointerCancel(row, event)}
       onFocus={() => onHoveredTabChange?.(hoveredPreview)}
-      onDragOver={(event) => onDragOver(row, event)}
-      onDrop={(event) => onDrop(row, event)}
     >
       <button
         type="button"
@@ -321,8 +343,7 @@ function PanelListRow({
             toggleKey: event.metaKey || event.ctrlKey
           })
         }
-        draggable={!tabDisabled && !row.tab.pinned}
-        onDragStart={(event) => onDragStart(row, event)}
+        onPointerDown={(event) => onPointerDown(row, event)}
         disabled={tabDisabled}
       >
         <span className="tab-row__favicon" aria-hidden="true">

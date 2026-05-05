@@ -493,24 +493,29 @@ test("选择模式：Ctrl+点击切换标签选中状态", async ({ extensionCon
 
   await sidepanelPage.bringToFront();
 
+  const searchInput = sidepanelPage.locator(".search-bar__input");
+  await expect(searchInput).toBeVisible({ timeout: 5_000 });
+  await searchInput.fill(uniqueSuffix);
+
   const tabTitle = `page-ctrl-sel-${uniqueSuffix}`;
-  const tabRow = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${tabTitle}` });
-  await expect(tabRow).toBeVisible({ timeout: 5_000 });
+  const tabRow = sidepanelPage.locator(".tab-row", {
+    has: sidepanelPage.locator(".tab-row__title", { hasText: tabTitle })
+  }).first();
+  const tabMain = tabRow.locator("button.tab-row__main");
+  await expect(tabMain).toBeVisible({ timeout: 5_000 });
 
   // No close-selected button initially
   await expect(sidepanelPage.getByRole("button", { name: /关闭已选/ })).toHaveCount(0);
 
+  const selectedSummary = sidepanelPage.locator(".panel-toolbar__selection");
+
   // Ctrl+click to select
-  await sidepanelPage.keyboard.down("Control");
-  await tabRow.click();
-  await sidepanelPage.keyboard.up("Control");
-  await expect(sidepanelPage.getByRole("button", { name: /关闭已选/ })).toBeVisible();
+  await tabMain.click({ modifiers: ["Control"] });
+  await expect(selectedSummary).toContainText(/Selected 1|已选 1 项/);
 
   // Ctrl+click to deselect
-  await sidepanelPage.keyboard.down("Control");
-  await tabRow.click();
-  await sidepanelPage.keyboard.up("Control");
-  await expect(sidepanelPage.getByRole("button", { name: /关闭已选/ })).toHaveCount(0);
+  await tabMain.click({ modifiers: ["Control"] });
+  await expect(selectedSummary).toHaveCount(0);
 });
 
 test("选择模式：Shift+点击范围选择多个标签", async ({ extensionContext, sidepanelPage, sidepanelApi }) => {
@@ -539,18 +544,18 @@ test("选择模式：Shift+点击范围选择多个标签", async ({ extensionCo
   }
   expect(testRowElements.length).toBeGreaterThanOrEqual(3);
 
+  const selectedRows = sidepanelPage.locator(".tab-row.tab-row--selected");
+  const selectedSummary = sidepanelPage.locator(".panel-toolbar__selection");
+
   // Ctrl+click first to set anchor
-  await sidepanelPage.keyboard.down("Control");
-  await testRowElements[0]!.click();
-  await sidepanelPage.keyboard.up("Control");
+  await testRowElements[0]!.click({ modifiers: ["Control"] });
 
   // Shift+click last for range
-  await sidepanelPage.keyboard.down("Shift");
-  await testRowElements[2]!.click();
-  await sidepanelPage.keyboard.up("Shift");
+  await testRowElements[2]!.click({ modifiers: ["Shift"] });
 
-  // All 3 selected -> "关闭已选（3）"
-  await expect(sidepanelPage.getByRole("button", { name: "关闭已选（3）" })).toBeVisible();
+  // All 3 rows should be visually selected
+  await expect(selectedRows).toHaveCount(3);
+  await expect(selectedSummary).toContainText(/Selected 3|已选 3 项/);
 });
 
 test("选择模式：Escape 退出选择模式", async ({ extensionContext, sidepanelPage, sidepanelApi }) => {
@@ -595,22 +600,24 @@ test("关闭选中的标签后从快照中移除", async ({ extensionContext, si
     (snapshot) => getSnapshotTabs(snapshot).filter((t) => t.url?.includes(`close-sel-${uniqueSuffix}`)).length >= 3
   );
 
+  const selectedRows = sidepanelPage.locator(".tab-row.tab-row--selected");
+  const selectedSummary = sidepanelPage.locator(".panel-toolbar__selection");
+
   // Select all 3 tabs via Ctrl+click
   await sidepanelPage.bringToFront();
   const tabRows = await sidepanelPage.getByRole("treeitem").all();
   for (const row of tabRows) {
     const name = await row.getAttribute("aria-label");
     if (name && name.includes(`close-sel-${uniqueSuffix}`)) {
-      await sidepanelPage.keyboard.down("Control");
-      await row.click();
-      await sidepanelPage.keyboard.up("Control");
+      await row.click({ modifiers: ["Control"] });
     }
   }
 
-  await expect(sidepanelPage.getByRole("button", { name: "关闭已选（3）" })).toBeVisible();
+  await expect(selectedRows).toHaveCount(3);
+  await expect(selectedSummary).toContainText(/Selected 3|已选 3 项/);
 
   // Click close selected
-  await sidepanelPage.getByRole("button", { name: /关闭已选/ }).click();
+  await sidepanelPage.locator('.panel-toolbar__button[aria-label^="Close selected"], .panel-toolbar__button[aria-label^="关闭已选"]').click();
 
   // Wait for tabs to disappear from snapshot
   await waitForSnapshot(
@@ -1069,14 +1076,7 @@ test("开启详细日志后点击激活标签不会产生 move 事件", async ({
   await optionsPage.close();
 });
 
-test("拖拽到标签行间隙时不会静默丢失移动命令", async ({ extensionContext, sidepanelApi, sidepanelPage }) => {
-  const { extensionId } = await openSidepanelPage(extensionContext, "dist");
-  const optionsPage = await extensionContext.newPage();
-  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
-    waitUntil: "domcontentloaded",
-    timeout: 10_000
-  });
-
+test("pointer drag 拖到标签间隙时仍会完成移动", async ({ extensionContext, sidepanelApi, sidepanelPage }) => {
   const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const pageA = await extensionContext.newPage();
   const pageB = await extensionContext.newPage();
@@ -1093,24 +1093,33 @@ test("拖拽到标签行间隙时不会静默丢失移动命令", async ({ exten
     (snapshot) => getSnapshotTabs(snapshot).filter((t) => t.title?.includes(`drag-gap-`) && t.title?.includes(uniqueSuffix)).length >= 3
   );
 
-  await optionsPage.bringToFront();
-  await optionsPage.getByLabel("开启详细日志").check();
   await sidepanelPage.bringToFront();
-  await expect(sidepanelPage.getByText("详细日志记录中")).toBeVisible();
+  await sidepanelApi.waitForInteractive();
+  const searchInput = sidepanelPage.locator(".search-bar__input");
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+  await searchInput.fill(uniqueSuffix);
 
   const beforeSnapshot = await sidepanelApi.getSnapshot();
   const dragATitle = `page-drag-gap-a-${uniqueSuffix}`;
   const dragBTitle = `page-drag-gap-b-${uniqueSuffix}`;
-  const dragCTitle = `page-drag-gap-c-${uniqueSuffix}`;
   const dragATab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === dragATitle);
+  const dragBTab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === dragBTitle);
   expect(dragATab).toBeDefined();
+  expect(dragBTab).toBeDefined();
 
-  const sourceRow = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${dragATitle}` });
-  const targetRowA = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${dragBTitle}` });
-  const targetRowB = sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${dragCTitle}` });
+  const filteredRows = sidepanelPage.locator(".tab-row button[role='treeitem']");
+  await expect(filteredRows).toHaveCount(3);
+
+  const sourceRow = filteredRows.nth(0);
+  const targetRowA = filteredRows.nth(1);
+  const targetRowB = filteredRows.nth(2);
   await expect(sourceRow).toBeVisible();
   await expect(targetRowA).toBeVisible();
   await expect(targetRowB).toBeVisible();
+
+  await expect(sourceRow.locator(".tab-row__title")).toHaveText(dragATitle);
+  await expect(targetRowA.locator(".tab-row__title")).toHaveText(dragBTitle);
+  await expect(targetRowB.locator(".tab-row__title")).toHaveText(`page-drag-gap-c-${uniqueSuffix}`);
 
   const sourceBox = await sourceRow.boundingBox();
   const targetBoxA = await targetRowA.boundingBox();
@@ -1134,24 +1143,107 @@ test("拖拽到标签行间隙时不会静默丢失移动命令", async ({ exten
   await expect
     .poll(async () => {
       const snapshot = await sidepanelApi.getSnapshot();
-      const movedTab = dragATab == null ? null : snapshot.tabsById[dragATab.id];
-      return movedTab?.index;
+      return snapshot.tabsById[dragATab!.id]?.index;
     })
-    .not.toBe(dragATab!.index);
+    .toBe(dragBTab!.index);
+});
 
-  const trace = await sidepanelApi.getTraceEntries();
-  const dragTrace = trace.filter((entry) =>
-    ["list/drag-start", "list/drop", "command/dispatch", "command/result"].includes(entry.event)
+test("pointer drag 在顶部热区自动滚动后仍可完成移动", async ({ extensionContext, sidepanelApi, sidepanelPage }) => {
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const tabCount = 18;
+
+  const pages = await Promise.all(
+    Array.from({ length: tabCount }, (_, index) => extensionContext.newPage().then(async (page) => {
+      await page.goto(createLocalPageUrl(`drag-auto-scroll-${index}-${uniqueSuffix}`));
+      await page.waitForLoadState("load");
+      return page;
+    }))
   );
 
-  expect(dragTrace.some((entry) => entry.event === "list/drag-start")).toBe(true);
-  expect(
-    dragTrace.some(
-      (entry) => entry.event === "command/dispatch" && ["tab/move", "tabs/move", "group/move"].includes(String(entry.details.commandType ?? ""))
-    )
-  ).toBe(true);
+  await waitForSnapshot(
+    sidepanelApi,
+    (snapshot) => getSnapshotTabs(snapshot).filter((tab) => tab.title?.includes(`drag-auto-scroll-`) && tab.title?.includes(uniqueSuffix)).length >= tabCount
+  );
 
-  await optionsPage.close();
+  await sidepanelPage.bringToFront();
+  await sidepanelApi.waitForInteractive();
+  const searchInput = sidepanelPage.locator(".search-bar__input");
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+  await searchInput.fill(uniqueSuffix);
+
+  const scrollContainer = sidepanelPage.locator(".panel-scroll");
+  await scrollContainer.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+
+  const filteredRows = sidepanelPage.locator(".tab-row button[role='treeitem']");
+  const sourceRow = filteredRows.last();
+  await expect(sourceRow).toBeVisible();
+
+  const sourceTitle = await sourceRow.locator(".tab-row__title").innerText();
+  const beforeSnapshot = await sidepanelApi.getSnapshot();
+  const sourceTab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === sourceTitle);
+  expect(sourceTab).toBeDefined();
+
+  const sourceBox = await sourceRow.boundingBox();
+  const scrollBox = await scrollContainer.boundingBox();
+  expect(sourceBox).not.toBeNull();
+  expect(scrollBox).not.toBeNull();
+
+  const initialScrollTop = await scrollContainer.evaluate((element) => element.scrollTop);
+  expect(initialScrollTop).toBeGreaterThan(0);
+
+  const hotZoneX = scrollBox!.x + Math.min(scrollBox!.width / 2, 80);
+  const hotZoneY = scrollBox!.y + 2;
+
+  await sidepanelPage.mouse.move(sourceBox!.x + 24, sourceBox!.y + sourceBox!.height / 2);
+  await sidepanelPage.mouse.down();
+  await sidepanelPage.mouse.move(hotZoneX, hotZoneY, { steps: 16 });
+
+  await expect
+    .poll(async () => scrollContainer.evaluate((element) => element.scrollTop), { timeout: 10_000 })
+    .toBeLessThan(initialScrollTop - 40);
+
+  const neutralX = scrollBox!.x + scrollBox!.width / 2;
+  const neutralY = scrollBox!.y + scrollBox!.height / 2;
+  await sidepanelPage.mouse.move(neutralX, neutralY, { steps: 8 });
+
+  const targetRow = filteredRows.nth(2);
+  await expect(targetRow).toBeVisible();
+
+  const targetTitle = await targetRow.locator(".tab-row__title").innerText();
+  const targetTab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === targetTitle);
+  expect(targetTab).toBeDefined();
+  expect(targetTab!.id).not.toBe(sourceTab!.id);
+
+  const targetBox = await targetRow.boundingBox();
+  expect(targetBox).not.toBeNull();
+
+  const dropX = targetBox!.x + 24;
+  const dropY = targetBox!.y + targetBox!.height * 0.75;
+
+  await sidepanelPage.mouse.move(dropX, dropY, { steps: 8 });
+  await sidepanelPage.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const snapshot = await sidepanelApi.getSnapshot();
+      const windowTabIds = snapshot.windowTabIds[targetTab!.windowId] ?? [];
+      return {
+        sourceIndex: snapshot.tabsById[sourceTab!.id]?.index ?? null,
+        targetIndex: snapshot.tabsById[targetTab!.id]?.index ?? null,
+        tabAtTargetIndex: windowTabIds[targetTab!.index] ?? null,
+        tabAfterTargetIndex: windowTabIds[targetTab!.index + 1] ?? null
+      };
+    })
+    .toEqual({
+      sourceIndex: targetTab!.index,
+      targetIndex: targetTab!.index + 1,
+      tabAtTargetIndex: sourceTab!.id,
+      tabAfterTargetIndex: targetTab!.id
+    });
+
+  await Promise.all(pages.map((page) => page.close()));
 });
 
 test("侧边栏加载时无 JS 错误", async ({ sidepanelPage }) => {

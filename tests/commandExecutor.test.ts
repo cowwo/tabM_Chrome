@@ -310,19 +310,15 @@ describe("commandExecutor", () => {
       toChromeApi(mocks)
     );
 
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, 1, {
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, [1, 2], {
       windowId: 4,
       index: -1
     });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 2, {
-      windowId: 4,
-      index: -1
-    });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 1, {
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 1, {
       windowId: 4,
       index: 2
     });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(4, 2, {
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 2, {
       windowId: 4,
       index: 3
     });
@@ -393,12 +389,11 @@ describe("commandExecutor", () => {
       toChromeApi(mocks)
     );
 
-    // 先逐个移到末尾
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, 101, { windowId: 2, index: -1 });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 102, { windowId: 2, index: -1 });
+    // 先批量移到末尾
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(1, [101, 102], { windowId: 2, index: -1 });
     // 再逐个移到目标索引
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 101, { windowId: 2, index: 1 });
-    expect(mocks.tabsMove).toHaveBeenNthCalledWith(4, 102, { windowId: 2, index: 2 });
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(2, 101, { windowId: 2, index: 1 });
+    expect(mocks.tabsMove).toHaveBeenNthCalledWith(3, 102, { windowId: 2, index: 2 });
     // 泄露修复
     expect(mocks.tabsGroup).toHaveBeenCalledWith({
       groupId: 66,
@@ -435,6 +430,8 @@ describe("commandExecutor", () => {
       toChromeApi(mocks)
     );
 
+    // 先解组，再移动，最后重建组
+    expect(mocks.tabsUngroup).toHaveBeenCalledWith([101, 102]);
     expect(mocks.tabsMove).toHaveBeenCalledWith([101, 102], {
       windowId: 9,
       index: 3
@@ -447,6 +444,41 @@ describe("commandExecutor", () => {
     });
     expect(mocks.tabGroupsUpdate).toHaveBeenCalledWith(77, {
       title: "66",
+      color: "pink",
+      collapsed: true
+    });
+  });
+
+  it("reuses empty group title from source when cross-window group move carries no custom title", async () => {
+    const mocks = createChromeApiMocks();
+    mocks.tabGroupsGet.mockResolvedValueOnce({
+      id: 66,
+      collapsed: true,
+      color: "pink",
+      title: "",
+      windowId: 2
+    });
+    mocks.tabsGet
+      .mockResolvedValueOnce({ id: 101, windowId: 2, index: 4, groupId: 66, pinned: false })
+      .mockResolvedValueOnce({ id: 102, windowId: 2, index: 5, groupId: 66, pinned: false });
+    mocks.tabsGroup.mockResolvedValueOnce(77);
+
+    await executeTabCommand(
+      {
+        type: "group/move",
+        groupId: 66,
+        tabIds: [101, 102],
+        targetWindowId: 9,
+        targetIndex: 3,
+        title: "",
+        color: "pink",
+        collapsed: true
+      },
+      toChromeApi(mocks)
+    );
+
+    expect(mocks.tabsUngroup).toHaveBeenCalledWith([101, 102]);
+    expect(mocks.tabGroupsUpdate).toHaveBeenCalledWith(77, {
       color: "pink",
       collapsed: true
     });

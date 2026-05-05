@@ -1,8 +1,10 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { NO_TAB_GROUP_ID } from "../src/shared/defaults";
-import type { PanelRow, TabRecord } from "../src/shared/types";
 import { buildWindowRenderSections } from "../src/shared/domain/selectors";
-import { areRowShellPropsEqual, type RowShellProps } from "../src/sidepanel/components/listRows";
+import type { PanelRow, TabRecord } from "../src/shared/types";
+import { areRowShellPropsEqual, RowShell, type RowShellProps } from "../src/sidepanel/components/listRows";
 import {
   calculateAnchorScrollAdjustment,
   calculateRequiredBottomSpacer,
@@ -22,6 +24,28 @@ import {
   createSelectedTabsDragSource,
   resolveDropTarget
 } from "../src/sidepanel/components/listDrag";
+import {
+  findClosestDropTarget,
+  type DragHitTestRow
+} from "../src/sidepanel/components/dragHitTesting";
+import {
+  collectVisibleDragRows,
+  createPointerDragSource,
+  isPointerWithinContainerBounds,
+  resolveDraggedRowKey,
+  resolvePointerCancelResult,
+  resolvePointerDragAutoScrollLoopState,
+  resolvePointerDragAutoScrollTickResult,
+  resolvePointerDragPhase,
+  resolvePointerDropOutcome,
+  resolvePointerUpResult,
+  resolveRenderedDropIndicator,
+  shouldClearPointerDragSession,
+  shouldClearSelectionOnPointerDown,
+  shouldHandleSelectionGestureOnPointerDown,
+  shouldStartPointerDragSession,
+  shouldSuppressPostDragClick
+} from "../src/sidepanel/components/VirtualizedWindowList";
 
 function makeTab(overrides: Partial<TabRecord> = {}): TabRecord {
   return {
@@ -35,7 +59,8 @@ function makeTab(overrides: Partial<TabRecord> = {}): TabRecord {
     active: overrides.active ?? false,
     audible: overrides.audible ?? false,
     discarded: overrides.discarded ?? false,
-    favIconUrl: overrides.favIconUrl ?? null
+    favIconUrl: overrides.favIconUrl ?? null,
+    lastAccessed: overrides.lastAccessed ?? 0
   };
 }
 
@@ -86,6 +111,29 @@ function makeTabRow(overrides: Partial<Extract<PanelRow, { kind: "tab" }>> = {})
   };
 }
 
+function makeDragHitTestRowFromTab(
+  tab: TabRecord,
+  top: number,
+  bottom: number,
+  overrides: Partial<DragHitTestRow> = {}
+): DragHitTestRow {
+  return {
+    row: overrides.row ?? makeTabRow({ tab }),
+    rect: overrides.rect ?? {
+      top,
+      bottom,
+      left: 0,
+      right: 200,
+      height: bottom - top,
+      width: 200,
+      x: 0,
+      y: top,
+      toJSON: () => ({})
+    },
+    level: overrides.level ?? 0
+  };
+}
+
 function makeRowShellProps(overrides: Partial<RowShellProps> = {}): RowShellProps {
   const row = overrides.row ?? makeTabRow({ tab: makeTab({ id: 8, index: 3 }) });
   return {
@@ -106,19 +154,201 @@ function makeRowShellProps(overrides: Partial<RowShellProps> = {}): RowShellProp
     onTogglePinned: overrides.onTogglePinned ?? (() => undefined),
     onCloseTab: overrides.onCloseTab ?? (() => undefined),
     selectionMode: overrides.selectionMode ?? false,
-    onDragStart: overrides.onDragStart ?? (() => undefined),
-    onDragOver: overrides.onDragOver ?? (() => undefined),
-    onDrop: overrides.onDrop ?? (() => undefined),
+    onPointerDown: overrides.onPointerDown ?? (() => undefined),
+    onPointerEnter: overrides.onPointerEnter ?? (() => undefined),
+    onPointerMove: overrides.onPointerMove ?? (() => undefined),
+    onPointerUp: overrides.onPointerUp ?? (() => undefined),
+    onPointerCancel: overrides.onPointerCancel ?? (() => undefined),
     extraClassName: overrides.extraClassName,
     groupedTabColor: overrides.groupedTabColor,
     visuallyExpanded: overrides.visuallyExpanded ?? false,
     isDragging: overrides.isDragging ?? false,
     dropIndicator: overrides.dropIndicator ?? null,
-    onElementRefChange: overrides.onElementRefChange
+    onElementRefChange: overrides.onElementRefChange,
+    onHoveredTabChange: overrides.onHoveredTabChange
   };
 }
 
+function renderRowShellMarkup(overrides: Partial<RowShellProps>): string {
+  return renderToStaticMarkup(
+    createElement(RowShell, makeRowShellProps(overrides))
+  );
+}
+
 describe("VirtualizedWindowList helpers", () => {
+  it("marks the active dragged row and computed drop indicator from pointer session state", () => {
+    const currentTarget = {
+      rowKey: "tab-2",
+      targetWindowId: 1,
+      targetIndex: 3,
+      targetGroupId: null,
+      indicator: "after" as const
+    };
+
+    expect(resolveDraggedRowKey({ phase: "dragging", sourceRowKey: "tab-1" })).toBe("tab-1");
+    expect(resolveRenderedDropIndicator({ rowKey: "tab-2", target: currentTarget })).toBe("after");
+  });
+
+  it("routes modifier-assisted tab pointerdown to selection instead of drag", () => {
+    expect(
+      shouldHandleSelectionGestureOnPointerDown({
+        row: makeTabRow({ tab: makeTab({ id: 2, index: 1 }) }),
+        pointerGesture: {
+          ctrlKey: true,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toBe(true);
+
+    expect(
+      shouldHandleSelectionGestureOnPointerDown({
+        row: makeTabRow({ tab: makeTab({ id: 2, index: 1 }) }),
+        pointerGesture: {
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toBe(false);
+  });
+
+  it("does not start a pointer drag session when a selection modifier is held", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 2, index: 1 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    expect(
+      shouldStartPointerDragSession({
+        source,
+        pointerGesture: {
+          ctrlKey: true,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toBe(false);
+  });
+
+  it("does not clear existing selection on pointer down when a multi-select modifier is held", () => {
+    expect(
+      shouldClearSelectionOnPointerDown({
+        row: makeTabRow({ tab: makeTab({ id: 2, index: 1 }) }),
+        selectedTabIds: new Set([1]),
+        pointerGesture: {
+          ctrlKey: true,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toBe(false);
+  });
+
+  it("does not start a drag source when a multi-select modifier is held", () => {
+    const rows = [
+      makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }),
+      makeTabRow({ tab: makeTab({ id: 2, index: 1 }) })
+    ];
+
+    expect(
+      createPointerDragSource({
+        row: rows[1],
+        rows,
+        selectedTabIds: new Set([1]),
+        pointerGesture: {
+          ctrlKey: true,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toBeNull();
+  });
+
+  it("creates a multi-tab drag source when the row is already selected and no selection modifier is held", () => {
+    const rows = [
+      makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }),
+      makeTabRow({ tab: makeTab({ id: 2, index: 1 }) })
+    ];
+
+    expect(
+      createPointerDragSource({
+        row: rows[1],
+        rows,
+        selectedTabIds: new Set([1, 2]),
+        pointerGesture: {
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toEqual({
+      kind: "tabs",
+      rowKey: "tab-2",
+      tabIds: [1, 2],
+      tabs: [
+        { tabId: 1, windowId: 1, index: 0, groupId: null },
+        { tabId: 2, windowId: 1, index: 1, groupId: null }
+      ]
+    });
+  });
+
+  it("starts dragging only after pointer movement exceeds threshold", () => {
+    expect(
+      resolvePointerDragPhase({
+        origin: { x: 10, y: 10 },
+        pointer: { x: 12, y: 13 },
+        threshold: 6
+      })
+    ).toBe("pressing");
+
+    expect(
+      resolvePointerDragPhase({
+        origin: { x: 10, y: 10 },
+        pointer: { x: 20, y: 20 },
+        threshold: 6
+      })
+    ).toBe("dragging");
+  });
+
+  it("allows auto-scroll to restart within the same dragging session after becoming inactive", () => {
+    expect(
+      resolvePointerDragAutoScrollLoopState({
+        isDragging: true,
+        hasScheduledFrame: false,
+        delta: 12,
+        didScroll: true
+      })
+    ).toEqual({
+      shouldScheduleFromPointerMove: true,
+      shouldScheduleNextFrame: true
+    });
+
+    expect(
+      resolvePointerDragAutoScrollLoopState({
+        isDragging: true,
+        hasScheduledFrame: true,
+        delta: 0,
+        didScroll: false
+      })
+    ).toEqual({
+      shouldScheduleFromPointerMove: false,
+      shouldScheduleNextFrame: false
+    });
+
+    expect(
+      resolvePointerDragAutoScrollLoopState({
+        isDragging: true,
+        hasScheduledFrame: false,
+        delta: 18,
+        didScroll: true
+      })
+    ).toEqual({
+      shouldScheduleFromPointerMove: true,
+      shouldScheduleNextFrame: true
+    });
+  });
+
   it("scrolls to an active row when it first appears", () => {
     expect(
       shouldScrollToActiveRow({
@@ -229,14 +459,78 @@ describe("VirtualizedWindowList helpers", () => {
     ).toBe(62);
   });
 
+  it("compares RowShell props without native drag handler props", () => {
+    const base = makeRowShellProps({
+      onPointerDown: () => undefined,
+      onPointerEnter: () => undefined,
+      onPointerMove: () => undefined,
+      onPointerUp: () => undefined,
+      onPointerCancel: () => undefined
+    });
+
+    expect(
+      areRowShellPropsEqual(
+        base,
+        makeRowShellProps({
+          ...base,
+          onPointerMove: () => undefined
+        })
+      )
+    ).toBe(false);
+  });
+
   it("compares RowShell props only by display-relevant values", () => {
     const base = makeRowShellProps();
     expect(areRowShellPropsEqual(base, makeRowShellProps({ ...base }))).toBe(true);
     expect(areRowShellPropsEqual(base, makeRowShellProps({ ...base, isSelected: true }))).toBe(false);
+    expect(areRowShellPropsEqual(base, makeRowShellProps({ ...base, groupedTabColor: "blue" }))).toBe(false);
+    expect(areRowShellPropsEqual(base, makeRowShellProps({ ...base, visuallyExpanded: true }))).toBe(false);
     expect(areRowShellPropsEqual(base, makeRowShellProps({ ...base, dropIndicator: "before" }))).toBe(false);
     expect(areRowShellPropsEqual(base, makeRowShellProps({ ...base, row: makeTabRow({ tab: makeTab({ id: 9, index: 4 }) }) }))).toBe(false);
   });
 
+  it("compares RowShell props with hovered tab callback changes", () => {
+    const base = makeRowShellProps({
+      onHoveredTabChange: () => undefined
+    });
+
+    expect(
+      areRowShellPropsEqual(
+        base,
+        makeRowShellProps({
+          ...base,
+          onHoveredTabChange: () => undefined
+        })
+      )
+    ).toBe(false);
+  });
+  it("renders grouped tab color passthrough in tab output", () => {
+    const markup = renderRowShellMarkup({
+      row: makeTabRow({ tab: makeTab({ id: 91, windowId: 1, index: 0, groupId: 9 }) }),
+      groupedTabColor: "blue"
+    });
+
+    expect(markup).toContain("tab-row--grouped-blue");
+    expect(markup).toContain('aria-level="3"');
+  });
+
+  it("renders visually expanded passthrough for collapsed window and group output", () => {
+    const windowMarkup = renderRowShellMarkup({
+      row: makeWindowRow({ windowId: 1, collapsed: true, totalCount: 2 }),
+      visuallyExpanded: true
+    });
+    const groupMarkup = renderRowShellMarkup({
+      row: makeGroupRow({ windowId: 1, groupId: 9, collapsed: true, tabIds: [91], totalCount: 1, firstTabIndex: 0 }),
+      visuallyExpanded: true
+    });
+
+    expect(windowMarkup).toContain("window-row--visually-expanded");
+    expect(windowMarkup).toContain('aria-expanded="true"');
+    expect(windowMarkup).toContain("▾");
+    expect(groupMarkup).toContain("group-row--visually-expanded");
+    expect(groupMarkup).toContain('aria-expanded="true"');
+    expect(groupMarkup).toContain("▾");
+  });
 
   it("builds window render sections with grouped child rows", () => {
     const rows: PanelRow[] = [
@@ -670,6 +964,318 @@ describe("listDrag helpers", () => {
     });
   });
 
+  it("returns explicit pointercancel results only for the matching pointer id", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    const draggingSession = {
+      phase: "dragging" as const,
+      pointerId: 11,
+      origin: { x: 10, y: 10 },
+      source,
+      pointer: { x: 18, y: 82 },
+      target: {
+        rowKey: "tab-2",
+        targetWindowId: 1,
+        targetIndex: 3,
+        targetGroupId: null,
+        indicator: "after" as const
+      }
+    };
+
+    expect(
+      resolvePointerCancelResult({
+        session: draggingSession,
+        pointerId: 11
+      })
+    ).toEqual({
+      nextSession: { phase: "idle" },
+      wasCancelled: true
+    });
+
+    expect(
+      resolvePointerCancelResult({
+        session: draggingSession,
+        pointerId: 99
+      })
+    ).toEqual({
+      nextSession: draggingSession,
+      wasCancelled: false
+    });
+  });
+
+  it("derives pointerup state reset and optional command without side effects", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    const draggingSession = {
+      phase: "dragging" as const,
+      pointerId: 11,
+      origin: { x: 10, y: 10 },
+      source,
+      pointer: { x: 18, y: 82 },
+      target: {
+        rowKey: "tab-2",
+        targetWindowId: 1,
+        targetIndex: 3,
+        targetGroupId: null,
+        indicator: "after" as const
+      }
+    };
+
+    expect(
+      resolvePointerUpResult({
+        session: draggingSession,
+        releasedWithinContainer: true,
+        pointerId: 11
+      })
+    ).toEqual({
+      nextSession: { phase: "idle" },
+      shouldSuppressPostDragClick: true,
+      command: {
+        type: "tab/move",
+        tabId: 1,
+        targetWindowId: 1,
+        targetIndex: 2,
+        targetGroupId: null
+      }
+    });
+
+    expect(
+      resolvePointerUpResult({
+        session: draggingSession,
+        releasedWithinContainer: false,
+        pointerId: 11
+      })
+    ).toEqual({
+      nextSession: { phase: "idle" },
+      shouldSuppressPostDragClick: true,
+      command: null
+    });
+
+    expect(
+      resolvePointerUpResult({
+        session: { phase: "pressing", pointerId: 11, origin: { x: 10, y: 10 }, source },
+        releasedWithinContainer: true,
+        pointerId: 11
+      })
+    ).toEqual({
+      nextSession: { phase: "idle" },
+      shouldSuppressPostDragClick: false,
+      command: null
+    });
+
+    expect(
+      resolvePointerUpResult({
+        session: draggingSession,
+        releasedWithinContainer: true,
+        pointerId: 99
+      })
+    ).toEqual({
+      nextSession: draggingSession,
+      shouldSuppressPostDragClick: false,
+      command: null
+    });
+  });
+
+  it("derives auto-scroll tick transitions without mutating component state", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    const draggingSession = {
+      phase: "dragging" as const,
+      pointerId: 11,
+      origin: { x: 10, y: 10 },
+      source,
+      pointer: { x: 24, y: 186 },
+      target: null
+    };
+    const nextTarget = {
+      rowKey: "tab-3",
+      targetWindowId: 1,
+      targetIndex: 4,
+      targetGroupId: null,
+      indicator: "after" as const
+    };
+
+    expect(
+      resolvePointerDragAutoScrollTickResult({
+        session: draggingSession,
+        nextScrollTop: 124,
+        shouldScheduleNextFrame: true,
+        nextTarget
+      })
+    ).toEqual({
+      nextSession: {
+        ...draggingSession,
+        target: nextTarget
+      },
+      nextScrollTop: 124,
+      shouldApplyScroll: true,
+      shouldScheduleNextFrame: true
+    });
+
+    expect(
+      resolvePointerDragAutoScrollTickResult({
+        session: draggingSession,
+        nextScrollTop: 124,
+        shouldScheduleNextFrame: false,
+        nextTarget
+      })
+    ).toEqual({
+      nextSession: draggingSession,
+      nextScrollTop: 124,
+      shouldApplyScroll: false,
+      shouldScheduleNextFrame: false
+    });
+
+    expect(
+      resolvePointerDragAutoScrollTickResult({
+        session: { phase: "idle" },
+        nextScrollTop: 124,
+        shouldScheduleNextFrame: true,
+        nextTarget
+      })
+    ).toEqual({
+      nextSession: { phase: "idle" },
+      nextScrollTop: 124,
+      shouldApplyScroll: false,
+      shouldScheduleNextFrame: false
+    });
+  });
+
+  it("submits exactly one move command or one explicit cancellation on pointerup", () => {
+    expect(
+      resolvePointerDropOutcome({
+        phase: "dragging",
+        target: {
+          rowKey: "tab-2",
+          targetWindowId: 1,
+          targetIndex: 3,
+          targetGroupId: null,
+          indicator: "after"
+        },
+        releasedWithinContainer: true
+      })
+    ).toBe("submit");
+
+    expect(
+      resolvePointerDropOutcome({
+        phase: "dragging",
+        target: null,
+        releasedWithinContainer: true
+      })
+    ).toBe("cancel");
+  });
+
+  it("cancels pointerup outside the list container even when a last target exists", () => {
+    expect(
+      resolvePointerDropOutcome({
+        phase: "dragging",
+        target: {
+          rowKey: "tab-2",
+          targetWindowId: 1,
+          targetIndex: 3,
+          targetGroupId: null,
+          indicator: "after"
+        },
+        releasedWithinContainer: false
+      })
+    ).toBe("cancel");
+  });
+
+  it("suppresses post-drag click activation only after a threshold-crossed drag", () => {
+    expect(shouldSuppressPostDragClick({ phase: "pressing" })).toBe(false);
+    expect(shouldSuppressPostDragClick({ phase: "dragging" })).toBe(true);
+    expect(shouldSuppressPostDragClick({ phase: "idle" })).toBe(false);
+  });
+
+  it("starts suppressing post-drag click only after the drag threshold is crossed", () => {
+    const origin = { x: 10, y: 10 };
+
+    expect(
+      shouldSuppressPostDragClick({
+        phase: resolvePointerDragPhase({
+          origin,
+          pointer: { x: 12, y: 13 },
+          threshold: 6
+        })
+      })
+    ).toBe(false);
+
+    expect(
+      shouldSuppressPostDragClick({
+        phase: resolvePointerDragPhase({
+          origin,
+          pointer: { x: 18, y: 18 },
+          threshold: 6
+        })
+      })
+    ).toBe(true);
+  });
+
+  it("treats pointer release beyond container bounds as outside the list", () => {
+    const containerRect = {
+      left: 10,
+      right: 210,
+      top: 20,
+      bottom: 120
+    };
+
+    expect(
+      isPointerWithinContainerBounds({
+        pointer: { x: 50, y: 60 },
+        containerRect
+      })
+    ).toBe(true);
+
+    expect(
+      isPointerWithinContainerBounds({
+        pointer: { x: 211, y: 60 },
+        containerRect
+      })
+    ).toBe(false);
+
+    expect(
+      isPointerWithinContainerBounds({
+        pointer: { x: 50, y: 121 },
+        containerRect
+      })
+    ).toBe(false);
+  });
+
+  it("only submits when both target exists and release stays within container bounds", () => {
+    const target = {
+      rowKey: "tab-2",
+      targetWindowId: 1,
+      targetIndex: 3,
+      targetGroupId: null,
+      indicator: "after" as const
+    };
+
+    expect(
+      resolvePointerDropOutcome({
+        phase: "dragging",
+        target,
+        releasedWithinContainer: true
+      })
+    ).toBe("submit");
+
+    expect(
+      resolvePointerDropOutcome({
+        phase: "dragging",
+        target,
+        releasedWithinContainer: false
+      })
+    ).toBe("cancel");
+  });
+
   it("clamps pointer ratio for window and tab drop targets", () => {
     const tabSource = createDragSource(makeTabRow({ tab: makeTab({ id: 42, index: 2 }) }));
     if (!tabSource) {
@@ -726,6 +1332,153 @@ describe("listDrag helpers", () => {
       tabId: 1,
       targetWindowId: 1,
       targetIndex: 3,
+      targetGroupId: null
+    });
+  });
+
+  it("collects visible drag rows for geometry hit testing from mounted row refs", () => {
+    const firstRect = {
+      top: 40,
+      bottom: 80,
+      left: 0,
+      right: 200,
+      height: 40,
+      width: 200,
+      x: 0,
+      y: 40,
+      toJSON: () => ({})
+    } as DOMRect;
+    const secondRect = {
+      top: 86,
+      bottom: 126,
+      left: 0,
+      right: 200,
+      height: 40,
+      width: 200,
+      x: 0,
+      y: 86,
+      toJSON: () => ({})
+    } as DOMRect;
+
+    const rows = [
+      makeTabRow({ tab: makeTab({ id: 2, index: 2, title: "Tab 2" }) }),
+      makeTabRow({ tab: makeTab({ id: 3, index: 3, title: "Tab 3" }) }),
+      makeWindowRow({ windowId: 9 })
+    ];
+
+    const rowRefs = new Map<string, HTMLDivElement>([
+      [rows[0].key, { getBoundingClientRect: () => firstRect } as HTMLDivElement],
+      [rows[1].key, { getBoundingClientRect: () => secondRect } as HTMLDivElement]
+    ]);
+
+    expect(collectVisibleDragRows({ rows, rowRefs })).toEqual([
+      {
+        row: rows[0],
+        rect: firstRect,
+        level: 0
+      },
+      {
+        row: rows[1],
+        rect: secondRect,
+        level: 0
+      }
+    ]);
+  });
+
+  it("wires a threshold-crossed pointer drag target into the rendered drop indicator class", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    const pointerPhase = resolvePointerDragPhase({
+      origin: { x: 10, y: 10 },
+      pointer: { x: 18, y: 82 },
+      threshold: 6
+    });
+
+    const targetRows = collectVisibleDragRows({
+      rows: [
+        makeTabRow({ tab: makeTab({ id: 2, index: 2, title: "Tab 2" }) }),
+        makeTabRow({ tab: makeTab({ id: 3, index: 3, title: "Tab 3" }) })
+      ],
+      rowRefs: new Map<string, HTMLDivElement>([
+        ["tab-2", {
+          getBoundingClientRect: () => ({
+            top: 40,
+            bottom: 80,
+            left: 0,
+            right: 200,
+            height: 40,
+            width: 200,
+            x: 0,
+            y: 40,
+            toJSON: () => ({})
+          })
+        } as HTMLDivElement],
+        ["tab-3", {
+          getBoundingClientRect: () => ({
+            top: 86,
+            bottom: 126,
+            left: 0,
+            right: 200,
+            height: 40,
+            width: 200,
+            x: 0,
+            y: 86,
+            toJSON: () => ({})
+          })
+        } as HTMLDivElement]
+      ])
+    });
+
+    const target = findClosestDropTarget({
+      source,
+      pointer: { clientX: 18, clientY: 82 },
+      rows: targetRows
+    });
+
+    expect(pointerPhase).toBe("dragging");
+    expect(target).toEqual({
+      rowKey: "tab-2",
+      targetWindowId: 1,
+      targetIndex: 3,
+      targetGroupId: null,
+      indicator: "after"
+    });
+
+    const targetRow = targetRows.find((candidate) => candidate.row.key === target?.rowKey)?.row;
+    expect(targetRow).toBeDefined();
+
+    const markup = renderRowShellMarkup({
+      row: targetRow,
+      dropIndicator: target?.indicator ?? null
+    });
+
+    expect(markup).toContain("stack-list__item--drop-after");
+  });
+
+  it("uses computed geometry hit targets instead of native drop fallback state", () => {
+    const source = createDragSource(makeTabRow({ tab: makeTab({ id: 1, index: 0 }) }));
+    if (!source) {
+      throw new Error("expected source");
+    }
+
+    const target = findClosestDropTarget({
+      source,
+      pointer: { clientX: 24, clientY: 83 },
+      rows: [
+        makeDragHitTestRowFromTab(makeTab({ id: 2, index: 2, title: "Tab 2" }), 40, 80),
+        makeDragHitTestRowFromTab(makeTab({ id: 3, index: 3, title: "Tab 3" }), 86, 126)
+      ]
+    });
+
+    expect(target).not.toBeNull();
+    expect(buildDragCommand({ source, target: target! })).toEqual({
+      type: "tab/move",
+      tabId: 1,
+      targetWindowId: 1,
+      targetIndex: 2,
       targetGroupId: null
     });
   });
