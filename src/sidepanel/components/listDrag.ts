@@ -305,7 +305,7 @@ export function buildFallbackDragCommand(params: {
   return lastTarget == null ? null : buildDragCommand({ source, target: lastTarget });
 }
 
-function normalizeGroupId(groupId: number): number | null {
+export function normalizeGroupId(groupId: number): number | null {
   return groupId === NO_TAB_GROUP_ID ? null : groupId;
 }
 

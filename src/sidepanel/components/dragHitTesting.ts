@@ -1,6 +1,7 @@
 import type { PanelRow } from "../../shared/types";
 import type { DragSource, DropTarget } from "./listDrag";
-import { resolveDropTarget } from "./listDrag";
+import { resolveDropTarget, normalizeGroupId } from "./listDrag";
+import { NO_TAB_GROUP_ID } from "../../shared/defaults";
 
 export interface PointerPosition {
   clientX: number;
@@ -25,18 +26,52 @@ export function findClosestDropTarget(params: {
   rows: readonly DragHitTestRow[];
 }): DropTarget | null {
   const { source, pointer, rows } = params;
-  const nearestRow = rows
+  const nearestEntry = rows
     .map((entry) => ({ entry, distance: distanceToRect(pointer.clientY, entry.rect) }))
-    .sort((left, right) => left.distance - right.distance)[0]?.entry;
+    .sort((left, right) => left.distance - right.distance)[0];
 
-  if (!nearestRow) {
+  if (!nearestEntry) {
     return null;
   }
 
-  const pointerRatio = clampPointerRatio((pointer.clientY - nearestRow.rect.top) / nearestRow.rect.height);
+  const { row: nearestRow, rect: nearestRect } = nearestEntry.entry;
+
+  // When the nearest row is a child tab inside a group and the source is not
+  // already within that group, prefer an into-group target for the parent group.
+  if (
+    nearestRow.kind === "tab"
+    && nearestRow.tab.groupId !== NO_TAB_GROUP_ID
+    && source.kind !== "group"
+  ) {
+    const targetGroupId = normalizeGroupId(nearestRow.tab.groupId);
+    const isSourceInTargetGroup = source.kind === "tab"
+      ? source.groupId === targetGroupId
+      : source.tabs.every((t) => t.groupId === targetGroupId);
+
+    if (!isSourceInTargetGroup) {
+      const parentGroupEntry = rows.find(
+        (entry) => entry.row.kind === "group" && entry.row.groupId === nearestRow.tab.groupId
+      );
+      if (parentGroupEntry) {
+        const groupPointerRatio = clampPointerRatio(
+          (pointer.clientY - parentGroupEntry.rect.top) / parentGroupEntry.rect.height
+        );
+        const groupTarget = resolveDropTarget({
+          source,
+          targetRow: parentGroupEntry.row,
+          pointerRatio: groupPointerRatio
+        });
+        if (groupTarget) {
+          return groupTarget;
+        }
+      }
+    }
+  }
+
+  const pointerRatio = clampPointerRatio((pointer.clientY - nearestRect.top) / nearestRect.height);
   const directTarget = resolveDropTarget({
     source,
-    targetRow: nearestRow.row,
+    targetRow: nearestRow,
     pointerRatio
   });
 

@@ -148,6 +148,11 @@ export async function executeTabCommand(
       const tab = await chromeApi.tabs.get(command.tabId);
       assertMovableTabs([tab]);
 
+      // 跨窗口移动时先移出组，避免 Chrome 自动创建新组导致标题冲突
+      if (tab.windowId !== command.targetWindowId) {
+        await chromeApi.tabs.ungroup(command.tabId);
+      }
+
       await chromeApi.tabs.move(command.tabId, {
         windowId: command.targetWindowId,
         index: command.targetIndex
@@ -204,6 +209,9 @@ export async function executeTabCommand(
             }
           }
         } else {
+          // 跨窗口移动时先移出组，避免 Chrome 自动创建新组导致标题冲突
+          await chromeApi.tabs.ungroup(command.tabIds);
+
           await chromeApi.tabs.move(command.tabIds, {
             windowId: command.targetWindowId,
             index: targetIndex
@@ -267,7 +275,7 @@ export async function executeTabCommand(
         });
 
         await chromeApi.tabGroups.update(nextGroupId, {
-          title: command.title || undefined,
+          title: command.title,
           color: command.color,
           collapsed: command.collapsed
         });
@@ -292,7 +300,7 @@ export async function executeTabCommand(
           }
         }
 
-        // 修复泄露的标签
+        // Chrome 同窗口逐次移动 API 有时会使标签从组中脱落，需检查并重新归组
         const afterMove = await getExistingTabs(command.tabIds, chromeApi);
         const leakedIds = afterMove
           .filter((tab) => (tab.groupId ?? -1) !== command.groupId)

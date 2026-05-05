@@ -344,4 +344,174 @@ describe("dragHitTesting", () => {
       indicator: "before"
     } satisfies DropTarget);
   });
+
+  it("prefers parent group into-group when pointer is over a child tab in a cross-window drag", () => {
+    const crossWindowSource: DragSource = {
+      kind: "tab",
+      rowKey: "tab-1",
+      tabId: 1,
+      windowId: 2,
+      index: 0,
+      groupId: null
+    };
+
+    const rows: DragHitTestRow[] = [
+      makeDragHitTestRow({
+        row: {
+          kind: "group",
+          key: "group-9",
+          windowId: 1,
+          groupId: 9,
+          title: "Group 9",
+          color: "blue",
+          collapsed: false,
+          totalCount: 2,
+          tabIds: [91, 92],
+          firstTabIndex: 4
+        },
+        rect: {
+          top: 100,
+          bottom: 144,
+          left: 0,
+          right: 200,
+          height: 44,
+          width: 200,
+          x: 0,
+          y: 100,
+          toJSON: () => ({})
+        }
+      }),
+      makeDragHitTestRow({
+        row: {
+          kind: "tab",
+          key: "tab-91",
+          windowId: 1,
+          tab: {
+            id: 91,
+            windowId: 1,
+            index: 4,
+            groupId: 9,
+            title: "Tab 91",
+            url: "https://example.com/91",
+            pinned: false,
+            active: false,
+            audible: false,
+            discarded: false,
+            favIconUrl: null,
+            lastAccessed: 0
+          }
+        },
+        rect: {
+          top: 150,
+          bottom: 190,
+          left: 24,
+          right: 200,
+          height: 40,
+          width: 176,
+          x: 24,
+          y: 150,
+          toJSON: () => ({})
+        }
+      })
+    ];
+
+    expect(
+      findClosestDropTarget({
+        source: crossWindowSource,
+        pointer: { clientX: 100, clientY: 170 },
+        rows
+      })
+    ).toEqual({
+      rowKey: "group-9",
+      targetWindowId: 1,
+      targetIndex: 4,
+      targetGroupId: 9,
+      indicator: "into-group"
+    } satisfies DropTarget);
+  });
+
+  it("keeps same-group intra-group drop behavior when pointer is over a child tab", () => {
+    const sameGroupSource: DragSource = {
+      kind: "tab",
+      rowKey: "tab-92",
+      tabId: 92,
+      windowId: 1,
+      index: 5,
+      groupId: 9
+    };
+
+    const rows: DragHitTestRow[] = [
+      makeDragHitTestRow({
+        row: {
+          kind: "group",
+          key: "group-9",
+          windowId: 1,
+          groupId: 9,
+          title: "Group 9",
+          color: "blue",
+          collapsed: false,
+          totalCount: 2,
+          tabIds: [91, 92],
+          firstTabIndex: 4
+        },
+        rect: {
+          top: 100,
+          bottom: 144,
+          left: 0,
+          right: 200,
+          height: 44,
+          width: 200,
+          x: 0,
+          y: 100,
+          toJSON: () => ({})
+        }
+      }),
+      makeDragHitTestRow({
+        row: {
+          kind: "tab",
+          key: "tab-91",
+          windowId: 1,
+          tab: {
+            id: 91,
+            windowId: 1,
+            index: 4,
+            groupId: 9,
+            title: "Tab 91",
+            url: "https://example.com/91",
+            pinned: false,
+            active: false,
+            audible: false,
+            discarded: false,
+            favIconUrl: null,
+            lastAccessed: 0
+          }
+        },
+        rect: {
+          top: 150,
+          bottom: 190,
+          left: 24,
+          right: 200,
+          height: 40,
+          width: 176,
+          x: 24,
+          y: 150,
+          toJSON: () => ({})
+        }
+      })
+    ];
+
+    expect(
+      findClosestDropTarget({
+        source: sameGroupSource,
+        pointer: { clientX: 100, clientY: 170 },
+        rows
+      })
+    ).toEqual({
+      rowKey: "tab-91",
+      targetWindowId: 1,
+      targetIndex: 5,
+      targetGroupId: 9,
+      indicator: "after"
+    } satisfies DropTarget);
+  });
 });
