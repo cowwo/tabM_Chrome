@@ -1,4 +1,4 @@
-import { CloseSmall, Refresh, SettingTwo, ExpandDownOne, FoldUpOne, ListCheckbox, CheckSmall, Aiming, MonitorOne, Intersection } from "@icon-park/react";
+import { Delete, Refresh, SettingTwo, ExpandDownOne, FoldUpOne, ListCheckbox, CloseSmall, Aiming, MonitorOne, Intersection } from "@icon-park/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { translate, type SupportedLocale } from "../shared/i18n";
 import { resolveBulkToggleToolbarAction } from "./toolbarActions";
@@ -117,9 +117,9 @@ export function SidepanelToolbar({
 
   const leadingToolbarActions: ToolbarAction[] = [
     {
-      key: selectionMode ? "selection-done" : "selection-start",
-      label: translate(locale, selectionMode ? "sidepanel.toolbar.selection.done" : "sidepanel.toolbar.selection.start"),
-      icon: selectionMode ? CheckSmall : ListCheckbox,
+      key: selectionMode ? "selection-cancel" : "selection-start",
+      label: translate(locale, selectionMode ? "sidepanel.toolbar.selection.cancel" : "sidepanel.toolbar.selection.start"),
+      icon: selectionMode ? CloseSmall : ListCheckbox,
       onClick: onToggleSelectionMode,
       active: selectionMode
     },
@@ -170,7 +170,7 @@ export function SidepanelToolbar({
             label: translate(locale, "sidepanel.toolbar.closeSelected", {
               count: selectedCount
             }),
-            icon: CloseSmall,
+            icon: Delete,
             onClick: onCloseSelected
           }
         ]

@@ -468,16 +468,16 @@ test("选择模式：工具栏按钮切换选择模式", async ({ extensionConte
   await sidepanelPage.bringToFront();
 
   // Not in selection mode initially
-  await expect(sidepanelPage.getByRole("button", { name: /^完成$/ })).toHaveCount(0);
+  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toHaveCount(0);
 
   // Enter selection mode
   await sidepanelPage.getByRole("button", { name: /^选择$/ }).click();
-  await expect(sidepanelPage.getByRole("button", { name: /^完成$/ })).toBeVisible();
+  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toBeVisible();
   await expect(sidepanelPage.getByText("已选 0 项")).toBeVisible();
 
   // Exit selection mode
-  await sidepanelPage.getByRole("button", { name: /^完成$/ }).click();
-  await expect(sidepanelPage.getByRole("button", { name: /^完成$/ })).toHaveCount(0);
+  await sidepanelPage.getByRole("button", { name: /^取消多选$/ }).click();
+  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toHaveCount(0);
 });
 
 test("选择模式：Ctrl+点击切换标签选中状态", async ({ extensionContext, sidepanelPage, sidepanelApi }) => {
@@ -575,11 +575,11 @@ test("选择模式：Escape 退出选择模式", async ({ extensionContext, side
   const selectBtn = sidepanelPage.getByRole("button", { name: /^选择$/ });
   await expect(selectBtn).toBeVisible();
   await selectBtn.click();
-  await expect(sidepanelPage.getByRole("button", { name: /^完成$/ })).toBeVisible();
+  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toBeVisible();
 
   // Escape to exit
   await sidepanelPage.keyboard.press("Escape");
-  await expect(sidepanelPage.getByRole("button", { name: /^完成$/ })).toHaveCount(0);
+  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toHaveCount(0);
   await expect(selectBtn).toBeVisible();
 });
 
@@ -647,7 +647,7 @@ test("选择重复标签后自动进入选择模式", async ({ extensionContext,
   await sidepanelPage.getByRole("button", { name: "选择重复标签" }).click();
 
   // Should enter selection mode with duplicates selected
-  await expect(sidepanelPage.getByRole("button", { name: /^完成$/ })).toBeVisible();
+  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toBeVisible();
   await expect(sidepanelPage.getByRole("button", { name: /关闭已选/ })).toBeVisible();
 });
 
