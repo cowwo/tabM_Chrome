@@ -161,4 +161,36 @@ describe("tab state", () => {
     expect(removed.focusedWindowId).toBe(1);
     expect(removed.tabsById[2]).toBeUndefined();
   });
+
+  it("records a focus event before tabs for that window arrive", () => {
+    const state = createStateFromTabs(
+      [makeTab({ id: 1, windowId: 1, index: 0 })],
+      1
+    );
+
+    const next = applyPatch(state, {
+      type: "window/focus",
+      windowId: 2
+    });
+
+    expect(next.focusedWindowId).toBe(2);
+    expect(next.windowOrder).toEqual([1]);
+  });
+
+  it("falls back to the first remaining window when the focused window is removed", () => {
+    const state = createStateFromTabs(
+      [
+        makeTab({ id: 1, windowId: 1, index: 0 }),
+        makeTab({ id: 2, windowId: 2, index: 0 }),
+        makeTab({ id: 3, windowId: 3, index: 0 })
+      ],
+      2
+    );
+
+    const next = removeTabRecord(state, 2, 2);
+
+    expect(next.windowOrder).toEqual([1, 3]);
+    expect(next.focusedWindowId).toBe(1);
+    expect(next.tabsById[2]).toBeUndefined();
+  });
 });
