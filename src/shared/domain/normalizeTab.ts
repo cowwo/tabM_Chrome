@@ -1,3 +1,4 @@
+import { sanitizeTabFaviconUrl } from "./favicon";
 import { NO_TAB_GROUP_ID } from "../defaults";
 import { getDisplayTabTitle } from "../i18n";
 import type { SupportedLocale, TabRecord } from "../types";
@@ -31,31 +32,5 @@ export function normalizeChromeTab(
 function getSafeFaviconUrl(tab: chrome.tabs.Tab): string | null {
   const pageUrl = tab.pendingUrl ?? tab.url ?? "";
   const rawFaviconUrl = tab.favIconUrl ?? "";
-  if (!rawFaviconUrl) {
-    return null;
-  }
-
-  try {
-    const faviconUrl = new URL(rawFaviconUrl);
-    if (isWebPageUrl(pageUrl) && (faviconUrl.protocol === "http:" || faviconUrl.protocol === "https:")) {
-      return rawFaviconUrl;
-    }
-
-    if (
-      faviconUrl.protocol === "chrome:" ||
-      faviconUrl.protocol === "chrome-extension:" ||
-      faviconUrl.protocol === "data:" ||
-      faviconUrl.protocol === "blob:"
-    ) {
-      return rawFaviconUrl;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-function isWebPageUrl(value: string): boolean {
-  return /^(https?|file):/i.test(value);
+  return sanitizeTabFaviconUrl(pageUrl, rawFaviconUrl);
 }

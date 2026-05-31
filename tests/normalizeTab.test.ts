@@ -102,6 +102,19 @@ describe("normalizeChromeTab", () => {
     expect(normalized?.favIconUrl).toBe("chrome-extension://suspender/icon.png");
   });
 
+  it("keeps data url favicons for file pages", () => {
+    const normalized = normalizeChromeTab({
+      id: 7,
+      windowId: 3,
+      index: 1,
+      title: "Local file",
+      url: "file:///Users/example/Documents/note.html",
+      favIconUrl: "data:image/png;base64,AAAA"
+    } as chrome.tabs.Tab);
+
+    expect(normalized?.favIconUrl).toBe("data:image/png;base64,AAAA");
+  });
+
   it("drops unsafe favicon urls for internal pages", () => {
     const normalized = normalizeChromeTab({
       id: 6,

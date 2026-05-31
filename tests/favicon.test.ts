@@ -1,4 +1,26 @@
-import { buildChromeFaviconProxyUrl, buildTabFaviconCandidates } from "../src/shared/domain/favicon";
+import {
+  buildChromeFaviconProxyUrl,
+  buildTabFaviconCandidates,
+  sanitizeTabFaviconUrl
+} from "../src/shared/domain/favicon";
+
+describe("sanitizeTabFaviconUrl", () => {
+  it("keeps safe web page favicon urls", () => {
+    expect(sanitizeTabFaviconUrl("https://example.com/page", "https://example.com/icon.png")).toBe(
+      "https://example.com/icon.png"
+    );
+  });
+
+  it("drops unsafe favicon urls on internal pages", () => {
+    expect(sanitizeTabFaviconUrl("chrome://settings", "https://unsafe.example.com/icon.png")).toBeNull();
+  });
+
+  it("keeps safe internal favicon urls", () => {
+    expect(sanitizeTabFaviconUrl("chrome-extension://abc/page.html", "chrome-extension://abc/icon.png")).toBe(
+      "chrome-extension://abc/icon.png"
+    );
+  });
+});
 
 describe("buildChromeFaviconProxyUrl", () => {
   beforeEach(() => {
@@ -57,6 +79,12 @@ describe("buildTabFaviconCandidates", () => {
     ).toEqual([
       "chrome-extension://abc/icon.png",
       "chrome-extension://unit-test/_favicon/?pageUrl=chrome-extension%3A%2F%2Fabc%2Fpage.html&size=16"
+    ]);
+  });
+
+  it("drops unsafe raw favicon urls and still returns the proxy fallback", () => {
+    expect(buildTabFaviconCandidates("chrome://settings", "https://unsafe.example.com/icon.png")).toEqual([
+      "chrome-extension://unit-test/_favicon/?pageUrl=chrome%3A%2F%2Fsettings&size=16"
     ]);
   });
 
