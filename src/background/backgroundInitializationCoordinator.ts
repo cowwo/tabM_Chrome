@@ -19,12 +19,16 @@ export interface BackgroundInitializationCoordinatorOptions {
     groups: TabGroupRecord[];
   }) => void;
   queryTabs?: () => Promise<chrome.tabs.Tab[]>;
+  queryFocusedWindowId?: () => Promise<number | null>;
+  queryAllTabGroupsForTabs?: (tabs: readonly chrome.tabs.Tab[]) => Promise<TabGroupRecord[]>;
 }
 
 export function createBackgroundInitializationCoordinator(
   options: BackgroundInitializationCoordinatorOptions
 ): BackgroundInitializationCoordinator {
   const queryTabs = options.queryTabs ?? (() => chrome.tabs.query({}));
+  const queryFocusedWindowId = options.queryFocusedWindowId ?? (() => getLastFocusedWindowId());
+  const queryAllTabGroups = options.queryAllTabGroupsForTabs ?? ((tabs) => queryAllTabGroupsForTabs(tabs));
   let initialized = false;
   let initializePromise: Promise<void> | null = null;
 
@@ -37,8 +41,8 @@ export function createBackgroundInitializationCoordinator(
       initializePromise = (async () => {
         const tabs = await queryTabs();
         const [focusedWindowId, groups] = await Promise.all([
-          getLastFocusedWindowId(),
-          queryAllTabGroupsForTabs(tabs)
+          queryFocusedWindowId(),
+          queryAllTabGroups(tabs)
         ]);
 
         options.setInitialStore({

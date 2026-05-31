@@ -3,12 +3,7 @@ import { NO_TAB_GROUP_ID, PANEL_PORT_NAME } from "../shared/defaults";
 import type { PanelToBackgroundMessage } from "../shared/messages";
 import { DEFAULT_EXTENSION_SETTINGS, EXTENSION_SETTINGS_STORAGE_KEY, loadExtensionSettings, mergeExtensionSettings } from "../shared/settings";
 import type { ExtensionSettingsRecord, StorePatch, TabGroupRecord, TabRecord } from "../shared/types";
-import {
-  queryGroups,
-  queryNormalizedGroup,
-  queryNormalizedTabsInGroup,
-  queryNormalizedTabsInWindow
-} from "./chromeQueries";
+import { createActionBadgeAdapter, createChromeQueryHelpers, createSidePanelRuntimeAlarmAdapter } from "./chromeAdapters";
 import { createWindowSyncCoordinator } from "./backgroundSyncCoordinator";
 import { createTabEventHandlers, createTabGroupEventHandlers, createWindowEventHandlers } from "./backgroundEventHandlers";
 import { createPortMessageHandlers } from "./backgroundHandlers";
@@ -33,10 +28,11 @@ import {
 const store = createBackgroundTabStore();
 const panelPortHub = createPanelPortHub();
 const detachedTabWindowIds = new Map<number, number>();
-
+const chromeQueryHelpers = createChromeQueryHelpers();
 const BADGE_BACKGROUND_COLOR = "#111827";
-let badgeUpdateQueued = false;
-let lastBadgeText: string | null = null;
+const KEEPALIVE_ALARM_NAME = "sw-keepalive";
+const KEEPALIVE_INTERVAL_MINUTES = 0.33; // ~20 seconds
+
 let extensionSettings: ExtensionSettingsRecord = {
   ...DEFAULT_EXTENSION_SETTINGS,
   badge: {
@@ -44,58 +40,39 @@ let extensionSettings: ExtensionSettingsRecord = {
   }
 };
 
+const actionBadgeAdapter = createActionBadgeAdapter({
+  action: chrome.action,
+  getTabCount: () => Object.keys(store.getSnapshot().tabsById).length,
+  isBadgeEnabled: () => extensionSettings.badge.enabled,
+  badgeBackgroundColor: BADGE_BACKGROUND_COLOR
+});
+
+const sidePanelRuntimeAlarmAdapter = createSidePanelRuntimeAlarmAdapter({
+  runtime: chrome.runtime,
+  alarms: chrome.alarms,
+  sidePanel: chrome.sidePanel,
+  ensureInitialized,
+  scheduleActionBadgeUpdate,
+  keepaliveAlarmName: KEEPALIVE_ALARM_NAME,
+  keepaliveIntervalMinutes: KEEPALIVE_INTERVAL_MINUTES
+});
+
 const initializationCoordinator = createBackgroundInitializationCoordinator({
   initializeTracePersistence,
   initializeExtensionSettings,
-  configureActionBadge,
-  configureSidePanel,
-  scheduleActionBadgeUpdate,
+  configureActionBadge: actionBadgeAdapter.configureActionBadge,
+  configureSidePanel: sidePanelRuntimeAlarmAdapter.configureSidePanel,
+  scheduleActionBadgeUpdate: actionBadgeAdapter.scheduleActionBadgeUpdate,
   setInitialStore: ({ tabs, focusedWindowId, groups }) => {
     store.initialize(tabs, focusedWindowId, groups);
-  }
+  },
+  queryTabs: chromeQueryHelpers.queryTabs,
+  queryFocusedWindowId: chromeQueryHelpers.queryFocusedWindowId,
+  queryAllTabGroupsForTabs: chromeQueryHelpers.queryAllTabGroupsForTabs
 });
 
-function configureActionBadge(): void {
-  chrome.action.setBadgeBackgroundColor({
-    color: BADGE_BACKGROUND_COLOR
-  });
-}
-
-function updateActionBadge(): void {
-  if (!extensionSettings.badge.enabled) {
-    if (lastBadgeText === "") {
-      return;
-    }
-
-    lastBadgeText = "";
-    chrome.action.setBadgeText({
-      text: ""
-    });
-    return;
-  }
-
-  const tabCount = Object.keys(store.getSnapshot().tabsById).length;
-  const nextText = String(tabCount);
-  if (nextText === lastBadgeText) {
-    return;
-  }
-
-  lastBadgeText = nextText;
-  chrome.action.setBadgeText({
-    text: nextText
-  });
-}
-
 function scheduleActionBadgeUpdate(): void {
-  if (badgeUpdateQueued) {
-    return;
-  }
-
-  badgeUpdateQueued = true;
-  queueMicrotask(() => {
-    badgeUpdateQueued = false;
-    updateActionBadge();
-  });
+  actionBadgeAdapter.scheduleActionBadgeUpdate();
 }
 
 async function initializeExtensionSettings(): Promise<void> {
@@ -142,9 +119,6 @@ const windowSyncCoordinator = createWindowSyncCoordinator({
   syncWindow: syncWindowFromChrome
 });
 
-const KEEPALIVE_ALARM_NAME = "sw-keepalive";
-const KEEPALIVE_INTERVAL_MINUTES = 0.33; // ~20 seconds
-
 type RegisterListener = () => void;
 
 void boot();
@@ -157,36 +131,12 @@ function registerBackgroundListeners(): void {
 function createBackgroundListenerRegistrations(): RegisterListener[] {
   return [
     () => chrome.storage.onChanged.addListener(handleSettingsStorageChange),
-    () =>
-      chrome.runtime.onInstalled.addListener(() => {
-        void configureSidePanel();
-      }),
-    () =>
-      chrome.runtime.onStartup.addListener(() => {
-        void ensureInitialized();
-        void configureSidePanel();
-      }),
-    registerKeepaliveAlarm,
+    sidePanelRuntimeAlarmAdapter.registerListeners,
     registerPanelPortListener,
     registerTabListeners,
     registerTabGroupListeners,
     registerWindowListeners
   ];
-}
-
-function registerKeepaliveAlarm(): void {
-  chrome.alarms.create(KEEPALIVE_ALARM_NAME, {
-    periodInMinutes: KEEPALIVE_INTERVAL_MINUTES
-  });
-  chrome.alarms.onAlarm.addListener(onKeepaliveAlarm);
-}
-
-function onKeepaliveAlarm(alarm: chrome.alarms.Alarm): void {
-  if (alarm.name !== KEEPALIVE_ALARM_NAME) {
-    return;
-  }
-
-  scheduleActionBadgeUpdate();
 }
 
 function registerPanelPortListener(): void {
@@ -302,12 +252,6 @@ async function ensureInitialized(): Promise<void> {
   await initializationCoordinator.ensureInitialized();
 }
 
-async function configureSidePanel(): Promise<void> {
-  await chrome.sidePanel.setPanelBehavior({
-    openPanelOnActionClick: true
-  });
-}
-
 async function handlePortMessage(
   port: chrome.runtime.Port,
   message: PanelToBackgroundMessage
@@ -381,7 +325,7 @@ async function syncWindowFromChrome(
   });
 
   try {
-    const normalizedTabs = await queryNormalizedTabsInWindow(windowId);
+    const normalizedTabs = await chromeQueryHelpers.queryNormalizedTabsInWindow(windowId);
     const staleTabIds = selectStaleTabIds(store.getWindowTabIds(windowId), normalizedTabs);
     staleTabIds.forEach((staleTabId) => {
       handlePatch(store.removeTab(staleTabId, windowId));
@@ -391,7 +335,7 @@ async function syncWindowFromChrome(
       handlePatch(store.upsertTab(normalizedTab));
     });
 
-    const groups = await queryGroups(collectNormalizedGroupIds(normalizedTabs));
+    const groups = await chromeQueryHelpers.queryGroups(collectNormalizedGroupIds(normalizedTabs));
     groups.forEach((group) => {
       handlePatch(store.upsertGroup(group));
     });
@@ -425,8 +369,8 @@ async function syncGroupFromChrome(
   }
 
   await syncGroupSnapshot({
-    queryGroup: () => queryNormalizedGroup(groupId, providedGroup),
-    queryTabsInGroup: () => queryNormalizedTabsInGroup(groupId),
+    queryGroup: () => chromeQueryHelpers.queryNormalizedGroup(groupId, providedGroup),
+    queryTabsInGroup: () => chromeQueryHelpers.queryNormalizedTabsInGroup(groupId),
     upsertGroup: upsertGroupRecord,
     upsertTab: upsertTabRecord,
     removeGroup: () => handlePatch(store.removeGroup(groupId))

@@ -44,4 +44,19 @@ describe("taskQueue", () => {
 
     expect(onError).toHaveBeenCalledWith(error);
   });
+
+  it("does not leak an unhandled rejection when a queued task is ignored", async () => {
+    const onError = vi.fn();
+    const queue = createTaskQueue(onError);
+    const error = new Error("ignored boom");
+
+    queue.enqueue(async () => {
+      throw error;
+    });
+
+    await queue.enqueue(async () => undefined);
+    await Promise.resolve();
+
+    expect(onError).toHaveBeenCalledWith(error);
+  });
 });

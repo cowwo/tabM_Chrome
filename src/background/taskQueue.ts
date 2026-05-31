@@ -9,11 +9,10 @@ export function createTaskQueue(onError: (error: unknown) => void): TaskQueue {
   return {
     enqueue<T>(task: () => Promise<T>): Promise<T> {
       const run = tail.then(task);
-      tail = run
-        .then(() => undefined)
-        .catch((error) => {
-          onError(error);
-        });
+      const handled = run.catch((error) => {
+        onError(error);
+      });
+      tail = handled.then(() => undefined, () => undefined);
 
       return run;
     },
