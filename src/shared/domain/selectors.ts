@@ -9,7 +9,7 @@ import type {
   WindowRenderItem,
   WindowRenderSection,
   WindowSection,
-  WindowSectionItem
+  WindowSectionItem,
 } from "../types";
 
 type TabRow = Extract<PanelRow, { kind: "tab" }>;
@@ -45,13 +45,13 @@ type WindowRowBlock = {
 export function selectWindowSections(
   state: TabStoreState,
   collapsedWindowIds: readonly number[],
-  locale: SupportedLocale = "en"
+  locale: SupportedLocale = "en",
 ): WindowSection[] {
   const collapsedWindowSet = new Set(collapsedWindowIds);
   const visibleWindows = state.windowOrder
     .map((windowId) => ({
       windowId,
-      tabs: selectTabsForWindow(state, windowId)
+      tabs: selectTabsForWindow(state, windowId),
     }))
     .filter(({ tabs }) => tabs.length > 0);
 
@@ -61,8 +61,9 @@ export function selectWindowSections(
     isFocused: state.focusedWindowId === windowId,
     collapsed: collapsedWindowSet.has(windowId),
     totalCount: tabs.length,
-    firstUnpinnedTabIndex: tabs.find((tab) => !tab.pinned)?.index ?? tabs.length,
-    items: buildWindowSectionItems(tabs, state)
+    firstUnpinnedTabIndex:
+      tabs.find((tab) => !tab.pinned)?.index ?? tabs.length,
+    items: buildWindowSectionItems(tabs, state),
   }));
 }
 
@@ -70,7 +71,7 @@ export function flattenWindowSections(
   sections: WindowSection[],
   options?: {
     includeCollapsedChildren?: boolean;
-  }
+  },
 ): PanelRow[] {
   const includeCollapsedChildren = options?.includeCollapsedChildren ?? false;
 
@@ -82,12 +83,16 @@ export function flattenWindowSections(
 
     return [
       windowRow,
-      ...section.items.flatMap((item) => createItemRows(section.windowId, item, includeCollapsedChildren))
+      ...section.items.flatMap((item) =>
+        createItemRows(section.windowId, item, includeCollapsedChildren),
+      ),
     ];
   });
 }
 
-export function buildWindowRenderSections(rows: readonly PanelRow[]): WindowRenderSection[] {
+export function buildWindowRenderSections(
+  rows: readonly PanelRow[],
+): WindowRenderSection[] {
   const sections: WindowRenderSection[] = [];
 
   for (let index = 0; index < rows.length; index += 1) {
@@ -105,7 +110,7 @@ export function buildWindowRenderSections(rows: readonly PanelRow[]): WindowRend
 
     sections.push({
       windowRow: row,
-      items: buildRenderItems(sectionRows)
+      items: buildRenderItems(sectionRows),
     });
     index = cursor - 1;
   }
@@ -118,16 +123,23 @@ export function selectCurrentActiveTabId(state: TabStoreState): number | null {
     return null;
   }
 
-  return (state.windowTabIds[state.focusedWindowId] ?? []).find((tabId) => state.tabsById[tabId]?.active) ?? null;
+  return (
+    (state.windowTabIds[state.focusedWindowId] ?? []).find(
+      (tabId) => state.tabsById[tabId]?.active,
+    ) ?? null
+  );
 }
 
-export function selectCurrentActiveGroupId(state: TabStoreState): number | null {
+export function selectCurrentActiveGroupId(
+  state: TabStoreState,
+): number | null {
   const currentActiveTabId = selectCurrentActiveTabId(state);
   if (currentActiveTabId == null) {
     return null;
   }
 
-  const groupId = state.tabsById[currentActiveTabId]?.groupId ?? NO_TAB_GROUP_ID;
+  const groupId =
+    state.tabsById[currentActiveTabId]?.groupId ?? NO_TAB_GROUP_ID;
   return groupId === NO_TAB_GROUP_ID ? null : groupId;
 }
 
@@ -148,41 +160,45 @@ export function resolveActiveGroupAutoExpand(params: {
     hasCompletedInitialCheck,
     currentActiveGroupId,
     hasCurrentActiveGroupRecord,
-    isCurrentActiveGroupCollapsed
+    isCurrentActiveGroupCollapsed,
   } = params;
 
   if (currentActiveTabId == null) {
     return {
       shouldAutoExpand: false,
-      shouldConsumeCheck: true
+      shouldConsumeCheck: true,
     };
   }
 
   if (currentActiveGroupId != null && !hasCurrentActiveGroupRecord) {
     return {
       shouldAutoExpand: false,
-      shouldConsumeCheck: false
+      shouldConsumeCheck: false,
     };
   }
 
   if (!isCurrentActiveGroupCollapsed) {
     return {
       shouldAutoExpand: false,
-      shouldConsumeCheck: true
+      shouldConsumeCheck: true,
     };
   }
 
   return {
-    shouldAutoExpand: !hasCompletedInitialCheck || previousActiveTabId !== currentActiveTabId,
-    shouldConsumeCheck: true
+    shouldAutoExpand:
+      !hasCompletedInitialCheck || previousActiveTabId !== currentActiveTabId,
+    shouldConsumeCheck: true,
   };
 }
 
 export function expandFocusedWindow(
   collapsedWindowIds: readonly number[],
-  focusedWindowId: number | null
+  focusedWindowId: number | null,
 ): readonly number[] {
-  if (focusedWindowId == null || !collapsedWindowIds.includes(focusedWindowId)) {
+  if (
+    focusedWindowId == null ||
+    !collapsedWindowIds.includes(focusedWindowId)
+  ) {
     return collapsedWindowIds;
   }
 
@@ -192,7 +208,7 @@ export function expandFocusedWindow(
 export function filterPanelRowsBySearch(
   rows: readonly PanelRow[],
   searchTerm: string,
-  mode: "filter" | "highlight"
+  mode: "filter" | "highlight",
 ): PanelRow[] {
   return createSearchResult(rows, searchTerm, mode).rows;
 }
@@ -204,7 +220,7 @@ export function countSearchMatches(rows: readonly PanelRow[]): number {
 export function createSearchResult(
   rows: readonly PanelRow[],
   searchTerm: string,
-  mode: "filter" | "highlight"
+  mode: "filter" | "highlight",
 ): {
   rows: PanelRow[];
   matchCount: number;
@@ -213,7 +229,7 @@ export function createSearchResult(
   if (!term) {
     return {
       rows: [...rows],
-      matchCount: 0
+      matchCount: 0,
     };
   }
 
@@ -224,8 +240,12 @@ export function createSearchResult(
 }
 
 export function getSearchMatchingTabIds(rows: readonly PanelRow[]): number[] {
-  return rows.flatMap((row) => (row.kind === "tab" && row.matchesSearch ? [row.tab.id] : []));
+  return rows.flatMap((row) =>
+    row.kind === "tab" && row.matchesSearch ? [row.tab.id] : [],
+  );
 }
+
+export type SearchResult = ReturnType<typeof createSearchResult>;
 
 export function hasRowKey(rows: readonly PanelRow[], rowKey: string): boolean {
   return rows.some((row) => row.key === rowKey);
@@ -243,7 +263,9 @@ export function resolveCollapsedWindowIdsForTarget(params: {
   return collapsedWindowIds.filter((windowId) => windowId !== targetWindowId);
 }
 
-function buildRenderItems(rows: Array<Exclude<PanelRow, { kind: "window" }>>): WindowRenderItem[] {
+function buildRenderItems(
+  rows: Array<Exclude<PanelRow, { kind: "window" }>>,
+): WindowRenderItem[] {
   const items: WindowRenderItem[] = [];
 
   for (let index = 0; index < rows.length; index += 1) {
@@ -251,7 +273,7 @@ function buildRenderItems(rows: Array<Exclude<PanelRow, { kind: "window" }>>): W
     if (row.kind !== "group") {
       items.push({
         kind: "single",
-        row
+        row,
       });
       continue;
     }
@@ -271,7 +293,7 @@ function buildRenderItems(rows: Array<Exclude<PanelRow, { kind: "window" }>>): W
     items.push({
       kind: "group-block",
       groupRow: row,
-      childRows
+      childRows,
     });
     index = cursor - 1;
   }
@@ -279,7 +301,10 @@ function buildRenderItems(rows: Array<Exclude<PanelRow, { kind: "window" }>>): W
   return items;
 }
 
-function selectTabsForWindow(state: TabStoreState, windowId: number): TabRecord[] {
+function selectTabsForWindow(
+  state: TabStoreState,
+  windowId: number,
+): TabRecord[] {
   return (state.windowTabIds[windowId] ?? [])
     .map((tabId) => state.tabsById[tabId])
     .filter((tab): tab is TabRecord => Boolean(tab));
@@ -288,17 +313,20 @@ function selectTabsForWindow(state: TabStoreState, windowId: number): TabRecord[
 function buildWindowTitle(
   tabs: readonly TabRecord[],
   visibleWindowIndex: number,
-  locale: SupportedLocale
+  locale: SupportedLocale,
 ): string {
   const activeTabTitle = tabs.find((tab) => tab.active)?.title?.trim() ?? "";
   return formatWindowTitle({
     locale,
     visibleWindowIndex,
-    activeTabTitle
+    activeTabTitle,
   });
 }
 
-function buildWindowSectionItems(tabs: readonly TabRecord[], state: TabStoreState): WindowSectionItem[] {
+function buildWindowSectionItems(
+  tabs: readonly TabRecord[],
+  state: TabStoreState,
+): WindowSectionItem[] {
   const groupedTabsById = new Map<number, TabRecord[]>();
   const itemDescriptors: WindowSectionItemDescriptor[] = [];
 
@@ -307,7 +335,7 @@ function buildWindowSectionItems(tabs: readonly TabRecord[], state: TabStoreStat
     if (!group) {
       itemDescriptors.push({
         kind: "tab",
-        tab
+        tab,
       });
       return;
     }
@@ -318,7 +346,7 @@ function buildWindowSectionItems(tabs: readonly TabRecord[], state: TabStoreStat
     if (existingTabs.length === 0) {
       itemDescriptors.push({
         kind: "group",
-        group
+        group,
       });
     }
   });
@@ -329,12 +357,15 @@ function buildWindowSectionItems(tabs: readonly TabRecord[], state: TabStoreStat
       : {
           kind: "group",
           group: descriptor.group,
-          tabs: groupedTabsById.get(descriptor.group.id) ?? []
-        }
+          tabs: groupedTabsById.get(descriptor.group.id) ?? [],
+        },
   );
 }
 
-function resolveTabGroup(state: TabStoreState, tab: TabRecord): TabGroupRecord | null {
+function resolveTabGroup(
+  state: TabStoreState,
+  tab: TabRecord,
+): TabGroupRecord | null {
   if (tab.groupId === NO_TAB_GROUP_ID) {
     return null;
   }
@@ -351,14 +382,14 @@ function createWindowRow(section: WindowSection): WindowRow {
     isFocused: section.isFocused,
     collapsed: section.collapsed,
     totalCount: section.totalCount,
-    firstUnpinnedTabIndex: section.firstUnpinnedTabIndex
+    firstUnpinnedTabIndex: section.firstUnpinnedTabIndex,
   };
 }
 
 function createItemRows(
   windowId: number,
   item: WindowSectionItem,
-  includeCollapsedChildren: boolean
+  includeCollapsedChildren: boolean,
 ): PanelRow[] {
   if (item.kind === "tab") {
     return [
@@ -366,8 +397,8 @@ function createItemRows(
         kind: "tab",
         key: `tab-${item.tab.id}`,
         windowId,
-        tab: item.tab
-      }
+        tab: item.tab,
+      },
     ];
   }
 
@@ -381,7 +412,7 @@ function createItemRows(
     collapsed: item.group.collapsed,
     totalCount: item.tabs.length,
     tabIds: item.tabs.map((tab) => tab.id),
-    firstTabIndex: item.tabs[0]?.index ?? 0
+    firstTabIndex: item.tabs[0]?.index ?? 0,
   };
 
   if (item.group.collapsed && !includeCollapsedChildren) {
@@ -396,7 +427,7 @@ function createTabRow(windowId: number, tab: TabRecord): TabRow {
     kind: "tab",
     key: `tab-${tab.id}`,
     windowId,
-    tab
+    tab,
   };
 }
 
@@ -405,7 +436,10 @@ function normalizeSearchTerm(searchTerm: string): string {
 }
 
 function matchesSearchTerm(tab: TabRecord, term: string): boolean {
-  return tab.title.toLowerCase().includes(term) || tab.url.toLowerCase().includes(term);
+  return (
+    tab.title.toLowerCase().includes(term) ||
+    tab.url.toLowerCase().includes(term)
+  );
 }
 
 function collectWindowRowBlocks(rows: readonly PanelRow[]): WindowRowBlock[] {
@@ -420,7 +454,7 @@ function collectWindowRowBlocks(rows: readonly PanelRow[]): WindowRowBlock[] {
     const { entries, nextIndex } = collectWindowBlockEntries(rows, index + 1);
     blocks.push({
       windowRow: row,
-      entries
+      entries,
     });
     index = nextIndex - 1;
   }
@@ -430,7 +464,7 @@ function collectWindowRowBlocks(rows: readonly PanelRow[]): WindowRowBlock[] {
 
 function collectWindowBlockEntries(
   rows: readonly PanelRow[],
-  startIndex: number
+  startIndex: number,
 ): {
   entries: WindowBlockEntry[];
   nextIndex: number;
@@ -441,11 +475,15 @@ function collectWindowBlockEntries(
   while (index < rows.length && rows[index].kind !== "window") {
     const row = rows[index];
     if (row.kind === "group") {
-      const { tabs, nextIndex } = collectGroupTabRows(rows, index + 1, row.groupId);
+      const { tabs, nextIndex } = collectGroupTabRows(
+        rows,
+        index + 1,
+        row.groupId,
+      );
       entries.push({
         kind: "group",
         row,
-        tabs
+        tabs,
       });
       index = nextIndex;
       continue;
@@ -454,7 +492,7 @@ function collectWindowBlockEntries(
     if (row.kind === "tab") {
       entries.push({
         kind: "tab",
-        row
+        row,
       });
     }
     index += 1;
@@ -462,14 +500,14 @@ function collectWindowBlockEntries(
 
   return {
     entries,
-    nextIndex: index
+    nextIndex: index,
   };
 }
 
 function collectGroupTabRows(
   rows: readonly PanelRow[],
   startIndex: number,
-  groupId: number
+  groupId: number,
 ): {
   tabs: TabRow[];
   nextIndex: number;
@@ -489,11 +527,14 @@ function collectGroupTabRows(
 
   return {
     tabs,
-    nextIndex: index
+    nextIndex: index,
   };
 }
 
-function filterWindowBlocks(blocks: readonly WindowRowBlock[], term: string): {
+function filterWindowBlocks(
+  blocks: readonly WindowRowBlock[],
+  term: string,
+): {
   rows: PanelRow[];
   matchCount: number;
 } {
@@ -502,36 +543,45 @@ function filterWindowBlocks(blocks: readonly WindowRowBlock[], term: string): {
       const filteredBlock = filterWindowBlock(block, term);
       return {
         rows: [...result.rows, ...filteredBlock.rows],
-        matchCount: result.matchCount + filteredBlock.matchCount
+        matchCount: result.matchCount + filteredBlock.matchCount,
       };
     },
     {
       rows: [],
-      matchCount: 0
-    }
+      matchCount: 0,
+    },
   );
 }
 
-function filterWindowBlock(block: WindowRowBlock, term: string): {
+function filterWindowBlock(
+  block: WindowRowBlock,
+  term: string,
+): {
   rows: PanelRow[];
   matchCount: number;
 } {
-  const filteredEntries = block.entries.flatMap((entry) => filterWindowBlockEntry(entry, term));
+  const filteredEntries = block.entries.flatMap((entry) =>
+    filterWindowBlockEntry(entry, term),
+  );
   const matchCount = filteredEntries.filter((row) => row.kind === "tab").length;
   return {
-    rows: filteredEntries.length > 0 ? [block.windowRow, ...filteredEntries] : [],
-    matchCount
+    rows:
+      filteredEntries.length > 0 ? [block.windowRow, ...filteredEntries] : [],
+    matchCount,
   };
 }
 
-function filterWindowBlockEntry(entry: WindowBlockEntry, term: string): PanelRow[] {
+function filterWindowBlockEntry(
+  entry: WindowBlockEntry,
+  term: string,
+): PanelRow[] {
   if (entry.kind === "tab") {
     return matchesSearchTerm(entry.row.tab, term)
       ? [
           {
             ...entry.row,
-            matchesSearch: true
-          }
+            matchesSearch: true,
+          },
         ]
       : [];
   }
@@ -541,24 +591,27 @@ function filterWindowBlockEntry(entry: WindowBlockEntry, term: string): PanelRow
       ? [
           {
             ...tabRow,
-            matchesSearch: true
-          }
+            matchesSearch: true,
+          },
         ]
-      : []
+      : [],
   );
 
   return matchingTabs.length > 0
     ? [
         {
           ...entry.row,
-          matchesSearch: true
+          matchesSearch: true,
         },
-        ...matchingTabs
+        ...matchingTabs,
       ]
     : [];
 }
 
-function highlightWindowBlocks(blocks: readonly WindowRowBlock[], term: string): {
+function highlightWindowBlocks(
+  blocks: readonly WindowRowBlock[],
+  term: string,
+): {
   rows: PanelRow[];
   matchCount: number;
 } {
@@ -567,52 +620,62 @@ function highlightWindowBlocks(blocks: readonly WindowRowBlock[], term: string):
       const highlightedBlock = highlightWindowBlock(block, term);
       return {
         rows: [...result.rows, ...highlightedBlock.rows],
-        matchCount: result.matchCount + highlightedBlock.matchCount
+        matchCount: result.matchCount + highlightedBlock.matchCount,
       };
     },
     {
       rows: [],
-      matchCount: 0
-    }
+      matchCount: 0,
+    },
   );
 }
 
-function highlightWindowBlock(block: WindowRowBlock, term: string): {
+function highlightWindowBlock(
+  block: WindowRowBlock,
+  term: string,
+): {
   rows: PanelRow[];
   matchCount: number;
 } {
-  const highlightedEntries = block.entries.flatMap((entry) => highlightWindowBlockEntry(entry, term));
-  const matchCount = highlightedEntries.filter((row) => row.kind === "tab" && row.matchesSearch).length;
+  const highlightedEntries = block.entries.flatMap((entry) =>
+    highlightWindowBlockEntry(entry, term),
+  );
+  const matchCount = highlightedEntries.filter(
+    (row) => row.kind === "tab" && row.matchesSearch,
+  ).length;
   const hasWindowMatch = matchCount > 0;
   const highlightedWindowRow: WindowRow = {
     ...block.windowRow,
-    matchesSearch: hasWindowMatch
+    matchesSearch: hasWindowMatch,
   };
 
   return {
     rows: [highlightedWindowRow, ...highlightedEntries],
-    matchCount
+    matchCount,
   };
 }
 
-function highlightWindowBlockEntry(entry: WindowBlockEntry, term: string): PanelRow[] {
+function highlightWindowBlockEntry(
+  entry: WindowBlockEntry,
+  term: string,
+): PanelRow[] {
   if (entry.kind === "tab") {
     return [
       {
         ...entry.row,
-        matchesSearch: matchesSearchTerm(entry.row.tab, term)
-      }
+        matchesSearch: matchesSearchTerm(entry.row.tab, term),
+      },
     ];
   }
 
   const highlightedTabs: TabRow[] = entry.tabs.map((tabRow) => ({
     ...tabRow,
-    matchesSearch: matchesSearchTerm(tabRow.tab, term)
+    matchesSearch: matchesSearchTerm(tabRow.tab, term),
   }));
   const hasGroupMatch = highlightedTabs.some((tabRow) => tabRow.matchesSearch);
   const highlightedGroupRow: GroupRow = {
     ...entry.row,
-    matchesSearch: hasGroupMatch
+    matchesSearch: hasGroupMatch,
   };
 
   return [highlightedGroupRow, ...highlightedTabs];
