@@ -177,6 +177,26 @@ describe("tab state", () => {
     expect(next.windowOrder).toEqual([1]);
   });
 
+  it("preserves a pending focused window across unrelated tab upserts", () => {
+    const initial = createStateFromTabs(
+      [makeTab({ id: 1, windowId: 1, index: 0 })],
+      1
+    );
+
+    const pendingFocus = applyPatch(initial, {
+      type: "window/focus",
+      windowId: 2
+    });
+
+    const next = upsertTabRecord(
+      pendingFocus,
+      makeTab({ id: 2, windowId: 1, index: 1 })
+    );
+
+    expect(next.focusedWindowId).toBe(2);
+    expect(next.windowOrder).toEqual([1]);
+  });
+
   it("falls back to the first remaining window when the focused window is removed", () => {
     const state = createStateFromTabs(
       [
