@@ -51,7 +51,7 @@ export function createStateFromTabs(
     windowTabIds,
     windowOrder,
     groupsById,
-    focusedWindowId: resolveFocusedWindowId(focusedWindowId, windowOrder, windowTabIds)
+    focusedWindowId: resolveFocusedWindowAfterMutation(focusedWindowId, windowOrder)
   };
 }
 
@@ -125,13 +125,10 @@ export function upsertTabRecord(state: TabStoreState, tab: TabRecord): TabStoreS
   }
 
   const windowOrder = sortWindowIds(Object.keys(windowTabIds).map(Number));
-  const focusedWindowId = resolveFocusedWindowId(
-    state.focusedWindowId,
-    windowOrder,
-    windowTabIds,
-    true,
-    removedWindowId
-  );
+  const focusedWindowId =
+    removedWindowId == null
+      ? resolveFocusedWindowAfterMutation(state.focusedWindowId, windowOrder)
+      : resolveFocusedWindowAfterRemoval(state.focusedWindowId, windowOrder, removedWindowId);
 
   return {
     tabsById,
@@ -159,20 +156,17 @@ export function removeTabRecord(
   delete tabsById[tabId];
 
   const nextIds = (windowTabIds[windowId] ?? []).filter((candidateId) => candidateId !== tabId);
-  if (nextIds.length > 0) {
-    windowTabIds[windowId] = nextIds;
-  } else {
+  const windowRemoved = nextIds.length === 0;
+  if (windowRemoved) {
     delete windowTabIds[windowId];
+  } else {
+    windowTabIds[windowId] = nextIds;
   }
 
   const windowOrder = sortWindowIds(Object.keys(windowTabIds).map(Number));
-  const focusedWindowId = resolveFocusedWindowId(
-    state.focusedWindowId,
-    windowOrder,
-    windowTabIds,
-    true,
-    windowId
-  );
+  const focusedWindowId = windowRemoved
+    ? resolveFocusedWindowAfterRemoval(state.focusedWindowId, windowOrder, windowId)
+    : resolveFocusedWindowAfterMutation(state.focusedWindowId, windowOrder);
 
   return {
     tabsById,
@@ -203,13 +197,7 @@ export function removeWindow(state: TabStoreState, windowId: number): TabStoreSt
   delete windowTabIds[windowId];
 
   const windowOrder = sortWindowIds(Object.keys(windowTabIds).map(Number));
-  const focusedWindowId = resolveFocusedWindowId(
-    state.focusedWindowId,
-    windowOrder,
-    windowTabIds,
-    true,
-    windowId
-  );
+  const focusedWindowId = resolveFocusedWindowAfterRemoval(state.focusedWindowId, windowOrder, windowId);
 
   return {
     tabsById,
@@ -220,24 +208,23 @@ export function removeWindow(state: TabStoreState, windowId: number): TabStoreSt
   };
 }
 
-function resolveFocusedWindowId(
+function resolveFocusedWindowAfterMutation(
+  focusedWindowId: number | null,
+  windowOrder: number[]
+): number | null {
+  return focusedWindowId != null ? focusedWindowId : windowOrder[0] ?? null;
+}
+
+function resolveFocusedWindowAfterRemoval(
   focusedWindowId: number | null,
   windowOrder: number[],
-  windowTabIds: Record<number, number[]>,
-  allowPendingFocusedWindow = false,
-  removedWindowId?: number
+  removedWindowId: number
 ): number | null {
-  if (focusedWindowId != null) {
-    if (windowTabIds[focusedWindowId]) {
-      return focusedWindowId;
-    }
-
-    if (allowPendingFocusedWindow && removedWindowId !== focusedWindowId) {
-      return focusedWindowId;
-    }
+  if (focusedWindowId == null || focusedWindowId === removedWindowId) {
+    return windowOrder[0] ?? null;
   }
 
-  return windowOrder[0] ?? null;
+  return focusedWindowId;
 }
 
 export function setFocusedWindow(state: TabStoreState, windowId: number | null): TabStoreState {

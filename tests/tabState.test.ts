@@ -162,6 +162,13 @@ describe("tab state", () => {
     expect(removed.tabsById[2]).toBeUndefined();
   });
 
+  it("preserves an explicit focused window during initialization even before tabs exist", () => {
+    const state = createStateFromTabs([], 7);
+
+    expect(state.focusedWindowId).toBe(7);
+    expect(state.windowOrder).toEqual([]);
+  });
+
   it("records a focus event before tabs for that window arrive", () => {
     const state = createStateFromTabs(
       [makeTab({ id: 1, windowId: 1, index: 0 })],
