@@ -1,11 +1,11 @@
 {
   "app_extension_name": {
-    "message": "侧边栏标签管家"
+    "message": "tabM"
   },
   "app_extension_description": {
-    "message": "极简的 Chrome 侧边栏网页定位插件，只保留显示和跳转能力。"
+    "message": "极简的 Chrome 侧边栏标签管理插件"
   },
   "app_action_title": {
-    "message": "打开侧边栏标签管家"
+    "message": "打开 tabM"
   }
 }
