@@ -23,16 +23,14 @@ export const test = base.extend<E2eFixture>({
     const isCI = Boolean(process.env.CI);
     const userDataDir = await mkdtemp(resolve(tmpdir(), "sidepanel-e2e-"));
     const context = await chromium.launchPersistentContext(userDataDir, {
-      // 统一用指定 Chromium 二进制（系统没装浏览器时也能跑）
       executablePath:
         process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
         "/home/ff/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome",
-      headless: false,
+      headless: true,
       args: [
-        "--headless=new",
         `--disable-extensions-except=${distDir}`,
         `--load-extension=${distDir}`,
-        "--no-sandbox",
+        ...(isCI ? ["--no-sandbox", "--disable-gpu"] : [])
       ]
     });
 
