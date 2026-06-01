@@ -1,6 +1,16 @@
 import { NO_TAB_GROUP_ID } from "../../shared/defaults";
 import type { PanelRow } from "../../shared/types";
-import type { DragHitTestRow } from "./dragHitTesting";
+export interface DragHitTestRow {
+  row: PanelRow;
+  rect: DOMRect;
+  level: number;
+}
+
+export interface GapCandidate {
+  distance: number;
+  pointerRatio: number;
+  row: PanelRow;
+}
 
 export type DragSource =
   | {
@@ -310,7 +320,7 @@ export function normalizeGroupId(groupId: number): number | null {
   return groupId === NO_TAB_GROUP_ID ? null : groupId;
 }
 
-function clampPointerRatio(pointerRatio: number): number {
+export function clampPointerRatio(pointerRatio: number): number {
   if (Number.isNaN(pointerRatio)) {
     return 0.5;
   }

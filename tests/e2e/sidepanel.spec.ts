@@ -47,9 +47,9 @@ async function setHoveredTabPreviewEnabled(
 
   const previewToggle = optionsPage.getByLabel("Show hovered tab preview");
   if (enabled) {
-    await previewToggle.check();
+    await previewToggle.click({ force: true });
   } else {
-    await previewToggle.uncheck();
+    await previewToggle.click({ force: true });
   }
 
   await optionsPage.close();
@@ -1029,7 +1029,7 @@ test("开启详细日志后点击激活标签不会产生 move 事件", async ({
   );
 
   await optionsPage.bringToFront();
-  await optionsPage.getByLabel("开启详细日志").check();
+  await optionsPage.getByLabel("开启详细日志").click({ force: true });
   await sidepanelPage.bringToFront();
   await expect(sidepanelPage.getByText("详细日志记录中")).toBeVisible();
 

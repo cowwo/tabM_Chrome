@@ -1,23 +1,13 @@
 import type { PanelRow } from "../../shared/types";
-import type { DragSource, DropTarget } from "./listDrag";
-import { resolveDropTarget, normalizeGroupId } from "./listDrag";
+import type { DragSource, DropTarget, DragHitTestRow, GapCandidate } from "./listDrag";
+import { resolveDropTarget, normalizeGroupId, clampPointerRatio } from "./listDrag";
 import { NO_TAB_GROUP_ID } from "../../shared/defaults";
+
+export type { DragHitTestRow, GapCandidate };
 
 export interface PointerPosition {
   clientX: number;
   clientY: number;
-}
-
-export interface DragHitTestRow {
-  row: PanelRow;
-  rect: DOMRect;
-  level: number;
-}
-
-export interface GapCandidate {
-  distance: number;
-  pointerRatio: number;
-  row: PanelRow;
 }
 
 export function findClosestDropTarget(params: {
@@ -116,12 +106,4 @@ export function distanceToRect(clientY: number, rect: DOMRect): number {
   }
 
   return 0;
-}
-
-export function clampPointerRatio(pointerRatio: number): number {
-  if (Number.isNaN(pointerRatio)) {
-    return 0.5;
-  }
-
-  return Math.max(0, Math.min(pointerRatio, 1));
 }

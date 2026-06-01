@@ -42,6 +42,55 @@ type WindowRowBlock = {
   entries: WindowBlockEntry[];
 };
 
+export interface PanelViewModel {
+  sections: WindowSection[];
+  rows: PanelRow[];
+  searchResult: {
+    rows: PanelRow[];
+    matchCount: number;
+  };
+  filteredRows: PanelRow[];
+  renderSections: WindowRenderSection[];
+  filteredRowKeySet: Set<string>;
+  searchMatchingTabIds: number[];
+  currentActiveTabId: number | null;
+  searchActive: boolean;
+  matchCount: number;
+}
+
+export function selectPanelViewModel(params: {
+  state: TabStoreState;
+  collapsedWindowIds: readonly number[];
+  searchTerm: string;
+  filterMode: "filter" | "highlight";
+  locale: SupportedLocale;
+}): PanelViewModel {
+  const { state, collapsedWindowIds, searchTerm, filterMode, locale } = params;
+  const sections = selectWindowSections(state, collapsedWindowIds, locale);
+  const searchActive = searchTerm.trim().length > 0;
+  const rows = flattenWindowSections(
+    sections,
+    searchActive ? { includeCollapsedChildren: true } : undefined
+  );
+  const searchResult = createSearchResult(rows, searchTerm, filterMode);
+  const filteredRows = searchResult.rows;
+  const filteredRowKeySet = new Set(filteredRows.map((row) => row.key));
+  const searchMatchingTabIds = getSearchMatchingTabIds(filteredRows);
+
+  return {
+    sections,
+    rows,
+    searchResult,
+    filteredRows,
+    renderSections: buildWindowRenderSections(filteredRows),
+    filteredRowKeySet,
+    searchMatchingTabIds,
+    currentActiveTabId: selectCurrentActiveTabId(state),
+    searchActive,
+    matchCount: searchResult.matchCount
+  };
+}
+
 export function selectWindowSections(
   state: TabStoreState,
   collapsedWindowIds: readonly number[],

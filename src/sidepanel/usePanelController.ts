@@ -177,6 +177,7 @@ export function usePanelController(locale: SupportedLocale) {
     postTraceEvent,
     resyncPanel,
     copyDebugTrace,
+    requestTraceBundle,
     exportDebugTrace,
     setVerboseLoggingEnabled,
     clearDebugTrace

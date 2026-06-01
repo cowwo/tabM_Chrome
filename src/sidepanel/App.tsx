@@ -6,7 +6,7 @@ import {
   resolveLocale,
   translate
 } from "../shared/i18n";
-import { buildWindowRenderSections, createSearchResult, flattenWindowSections, getSearchMatchingTabIds, selectCurrentActiveTabId, selectWindowSections } from "../shared/domain/selectors";
+import { selectPanelViewModel } from "../shared/domain/selectors";
 import { computeDuplicateSelection } from "../shared/domain/duplicateDetection";
 import {
   DEFAULT_EXTENSION_SETTINGS,
@@ -134,29 +134,22 @@ export default function App() {
     collapseAll
   } = useCollapsedWindows(snapshot, commandActions.setGroupCollapsed);
 
-  const sections = useMemo(
-    () => selectWindowSections(snapshot, collapsedWindowIds, locale),
-    [collapsedWindowIds, locale, snapshot]
+  const viewModel = useMemo(
+    () =>
+      selectPanelViewModel({
+        state: snapshot,
+        collapsedWindowIds,
+        searchTerm,
+        filterMode,
+        locale
+      }),
+    [collapsedWindowIds, filterMode, locale, searchTerm, snapshot]
   );
-  const searchActive = searchTerm.trim().length > 0;
-  const rows = useMemo(
-    () => flattenWindowSections(sections, searchActive ? { includeCollapsedChildren: true } : undefined),
-    [sections, searchActive]
-  );
-
-  const searchResult = useMemo(
-    () => createSearchResult(rows, searchTerm, filterMode),
-    [rows, searchTerm, filterMode]
-  );
-  const filteredRows = searchResult.rows;
-  const matchCount = searchResult.matchCount;
-  const renderSections = useMemo(() => buildWindowRenderSections(filteredRows), [filteredRows]);
-  const filteredRowKeySet = useMemo(() => new Set(filteredRows.map((row) => row.key)), [filteredRows]);
-
-
-  const currentActiveTabId = useMemo(() => selectCurrentActiveTabId(snapshot), [snapshot]);
+  const { filteredRows, renderSections, filteredRowKeySet, searchMatchingTabIds, currentActiveTabId, searchActive, matchCount } = viewModel;
   const toolbarDisabled = !isInteractive || isResyncing;
   const listDisabled = !hasUsableSnapshot;
+  const totalTabCount = Object.keys(snapshot.tabsById).length;
+  const showEmptyPlaceholder = !isLoading && hasUsableSnapshot && totalTabCount === 0;
 
   const { selectionMode, selectedTabIds, selectedTabIdSet, clearSelection, enterSelectionMode, exitSelectionMode, removeFromSelection, replaceSelection, handlePrimaryAction } =
     useTabSelection(filteredRows, (event, details) => {
@@ -166,7 +159,6 @@ export default function App() {
         category: "selection"
       });
     });
-  const searchMatchingTabIds = useMemo(() => getSearchMatchingTabIds(filteredRows), [filteredRows]);
   const effectiveSelectedTabIds = useMemo(
     () => Array.from(new Set([...selectedTabIds, ...searchMatchingTabIds])),
     [searchMatchingTabIds, selectedTabIds]
@@ -576,6 +568,8 @@ export default function App() {
           traceEntryCount={traceEntryCount}
           traceUpdatedAt={traceUpdatedAt}
           duplicateToast={duplicateToast}
+          hasUsableSnapshot={hasUsableSnapshot}
+          totalTabCount={totalTabCount}
           onCopyDebugTrace={
             errorMessage
               ? () => {
@@ -585,7 +579,7 @@ export default function App() {
           }
           copyTraceState={copyTraceState}
         />
-        {!isLoading ? (
+        {!isLoading && !showEmptyPlaceholder ? (
           <VirtualizedWindowList
             locale={locale}
             tabDisplaySize={settings.display.tabDisplaySize}

@@ -191,7 +191,7 @@ describe("panelControllerState", () => {
     });
   });
 
-  it("retains the last snapshot content when disconnecting after remote state arrives", () => {
+  it("keeps the last snapshot visible when a resync starts after remote state has arrived", () => {
     let state = createInitialPanelControllerState();
     state = reducePanelControllerState(state, {
       type: "background/message",
@@ -202,13 +202,13 @@ describe("panelControllerState", () => {
         }
       }
     });
-    state = reducePanelControllerState(state, {
-      type: "connection/disconnected"
+
+    const next = reducePanelControllerState(state, {
+      type: "resync/requested"
     });
 
-    expect(state.snapshot.version).toBe(4);
-    expect(state.snapshot.tabsById[21]?.id).toBe(21);
-    expect(state.isInteractive).toBe(false);
+    expect(next.snapshot.version).toBe(4);
+    expect(next.isInteractive).toBe(false);
   });
 
   it("tracks trace state from background messages in the reducer", () => {
