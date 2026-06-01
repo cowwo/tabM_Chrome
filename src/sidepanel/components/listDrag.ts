@@ -1,5 +1,6 @@
 import { NO_TAB_GROUP_ID } from "../../shared/defaults";
 import type { PanelRow } from "../../shared/types";
+import type { DragHitTestRow } from "./dragHitTesting";
 
 export type DragSource =
   | {
@@ -348,4 +349,293 @@ function normalizeGroupTargetIndex(params: {
   }
 
   return Math.max(0, targetIndex);
+}
+
+// ── Pointer drag types ──────────────────────────────────────────────
+
+export type PointerPosition = {
+  x: number;
+  y: number;
+};
+
+export type PointerDragSession =
+  | { phase: "idle" }
+  | {
+      phase: "pressing";
+      pointerId: number;
+      origin: PointerPosition;
+      source: DragSource;
+    }
+  | {
+      phase: "dragging";
+      pointerId: number;
+      origin: PointerPosition;
+      source: DragSource;
+      pointer: PointerPosition;
+      target: DropTarget | null;
+    };
+
+// ── Pointer drag session helpers ────────────────────────────────────
+
+export function resolvePointerDragPhase(params: {
+  origin: PointerPosition;
+  pointer: PointerPosition;
+  threshold: number;
+}): "pressing" | "dragging" {
+  const deltaX = params.pointer.x - params.origin.x;
+  const deltaY = params.pointer.y - params.origin.y;
+  return Math.hypot(deltaX, deltaY) >= params.threshold ? "dragging" : "pressing";
+}
+
+export function shouldClearPointerDragSession(
+  session: PointerDragSession,
+  pointerId: number
+): boolean {
+  return session.phase !== "idle" && session.pointerId === pointerId;
+}
+
+export function resolvePointerCancelResult(params: {
+  session: PointerDragSession;
+  pointerId: number;
+}): {
+  nextSession: PointerDragSession;
+  wasCancelled: boolean;
+} {
+  return shouldClearPointerDragSession(params.session, params.pointerId)
+    ? {
+        nextSession: { phase: "idle" },
+        wasCancelled: true
+      }
+    : {
+        nextSession: params.session,
+        wasCancelled: false
+      };
+}
+
+export function resolvePointerDragAutoScrollLoopState(params: {
+  isDragging: boolean;
+  hasScheduledFrame: boolean;
+  delta: number;
+  didScroll: boolean;
+}): {
+  shouldScheduleFromPointerMove: boolean;
+  shouldScheduleNextFrame: boolean;
+} {
+  const shouldAutoScroll = params.isDragging && params.delta !== 0 && params.didScroll;
+  return {
+    shouldScheduleFromPointerMove: shouldAutoScroll && !params.hasScheduledFrame,
+    shouldScheduleNextFrame: shouldAutoScroll
+  };
+}
+
+export function resolvePointerDropOutcome(session: {
+  phase: PointerDragSession["phase"];
+  target?: DropTarget | null;
+  releasedWithinContainer?: boolean;
+}): "submit" | "cancel" {
+  return session.phase === "dragging"
+    && session.releasedWithinContainer !== false
+    && session.target != null
+    ? "submit"
+    : "cancel";
+}
+
+export function resolveDraggedRowKey(session: {
+  phase: PointerDragSession["phase"];
+  sourceRowKey?: string;
+}): string | null {
+  return session.phase === "dragging" ? session.sourceRowKey ?? null : null;
+}
+
+export function resolveRenderedDropIndicator(params: {
+  rowKey: string;
+  target: DropTarget | null;
+}): DropTarget["indicator"] | null {
+  return params.target?.rowKey === params.rowKey ? params.target.indicator : null;
+}
+
+export function resolvePointerUpResult(params: {
+  session: PointerDragSession;
+  releasedWithinContainer: boolean;
+  pointerId: number;
+}): {
+  nextSession: PointerDragSession;
+  shouldSuppressPostDragClick: boolean;
+  command:
+    | ReturnType<typeof buildDragCommand>
+    | null;
+} {
+  const { session, releasedWithinContainer, pointerId } = params;
+
+  if (!shouldClearPointerDragSession(session, pointerId)) {
+    return {
+      nextSession: session,
+      shouldSuppressPostDragClick: false,
+      command: null
+    };
+  }
+
+  const shouldSubmit = session.phase === "dragging"
+    && resolvePointerDropOutcome({
+      phase: session.phase,
+      target: session.target,
+      releasedWithinContainer
+    }) === "submit";
+
+  return {
+    nextSession: { phase: "idle" },
+    shouldSuppressPostDragClick: shouldSuppressPostDragClick(session),
+    command: shouldSubmit && session.target != null
+      ? buildDragCommand({
+          source: session.source,
+          target: session.target
+        })
+      : null
+  };
+}
+
+export function resolvePointerDragAutoScrollTickResult(params: {
+  session: PointerDragSession;
+  nextScrollTop: number;
+  shouldScheduleNextFrame: boolean;
+  nextTarget: DropTarget | null;
+}): {
+  nextSession: PointerDragSession;
+  nextScrollTop: number;
+  shouldApplyScroll: boolean;
+  shouldScheduleNextFrame: boolean;
+} {
+  if (params.session.phase !== "dragging" || !params.shouldScheduleNextFrame) {
+    return {
+      nextSession: params.session,
+      nextScrollTop: params.nextScrollTop,
+      shouldApplyScroll: false,
+      shouldScheduleNextFrame: false
+    };
+  }
+
+  return {
+    nextSession: {
+      ...params.session,
+      target: params.nextTarget
+    },
+    nextScrollTop: params.nextScrollTop,
+    shouldApplyScroll: true,
+    shouldScheduleNextFrame: true
+  };
+}
+
+export function shouldSuppressPostDragClick(session: {
+  phase: PointerDragSession["phase"];
+}): boolean {
+  return session.phase === "dragging";
+}
+
+export function isPointerWithinContainerBounds(params: {
+  pointer: PointerPosition;
+  containerRect: Pick<DOMRect, "left" | "right" | "top" | "bottom">;
+}): boolean {
+  const { pointer, containerRect } = params;
+  return pointer.x >= containerRect.left
+    && pointer.x <= containerRect.right
+    && pointer.y >= containerRect.top
+    && pointer.y <= containerRect.bottom;
+}
+
+export function collectVisibleDragRows(params: {
+  rows: readonly PanelRow[];
+  rowRefs: ReadonlyMap<string, HTMLDivElement>;
+}): DragHitTestRow[] {
+  return params.rows.flatMap((row) => {
+    const node = params.rowRefs.get(row.key);
+    return node == null
+      ? []
+      : [{
+          row,
+          rect: node.getBoundingClientRect(),
+          level: 0
+        }];
+  });
+}
+
+// ── Selection gesture and drag source helpers ───────────────────────
+
+export function shouldHandleSelectionGestureOnPointerDown(params: {
+  row: PanelRow;
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+}): boolean {
+  const { row, pointerGesture } = params;
+
+  return row.kind === "tab" && (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey);
+}
+
+export function shouldClearSelectionOnPointerDown(params: {
+  row: PanelRow;
+  selectedTabIds: ReadonlySet<number>;
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+}): boolean {
+  const { row, selectedTabIds, pointerGesture } = params;
+
+  if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
+    return false;
+  }
+
+  return row.kind === "tab" && !selectedTabIds.has(row.tab.id) && selectedTabIds.size > 0;
+}
+
+export function createPointerDragSource(params: {
+  row: PanelRow;
+  rows: PanelRow[];
+  selectedTabIds: ReadonlySet<number>;
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+}): DragSource | null {
+  const { row, rows, selectedTabIds, pointerGesture } = params;
+
+  if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
+    return null;
+  }
+
+  const selectedTabsSource =
+    row.kind === "tab" && selectedTabIds.has(row.tab.id)
+      ? createSelectedTabsDragSource({
+          row,
+          rows,
+          selectedTabIds
+        })
+      : null;
+
+  if (row.kind === "tab" && selectedTabIds.has(row.tab.id) && selectedTabIds.size > 1 && !selectedTabsSource) {
+    return null;
+  }
+
+  return selectedTabsSource ?? createDragSource(row);
+}
+
+export function shouldStartPointerDragSession(params: {
+  pointerGesture: {
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+  };
+  source: DragSource | null;
+}): boolean {
+  const { pointerGesture, source } = params;
+
+  if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
+    return false;
+  }
+
+  return source != null;
 }
