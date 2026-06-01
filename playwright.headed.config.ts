@@ -13,7 +13,7 @@ export default defineConfig({
   use: {
     headless: false,
   },
-  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/tabm-e2e/latest/test-results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/tabm-e2e/latest",
   reporter: [
     ["html", { outputFolder: process.env.PLAYWRIGHT_HTML_REPORT_DIR || "/tmp/tabm-e2e/latest/report" }],
     ["list"],
