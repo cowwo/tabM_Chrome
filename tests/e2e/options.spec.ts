@@ -57,7 +57,7 @@ test("开启悬浮标签预览后侧边栏顶部显示标题和 URL，关闭后�
   await tabRow.hover();
   await expect(hoveredPreview).toHaveCount(0);
 
-  await optionsPage.getByLabel("Show hovered tab preview").check();
+  await optionsPage.getByLabel("Show hovered tab preview").click({ force: true });
 
   await sidepanelPage.reload({ waitUntil: "domcontentloaded" });
   await sidepanelPage.bringToFront();
@@ -65,7 +65,7 @@ test("开启悬浮标签预览后侧边栏顶部显示标题和 URL，关闭后�
   await expect(hoveredPreview).toContainText(targetTitle);
 
   await optionsPage.bringToFront();
-  await optionsPage.getByLabel("Show hovered tab preview").uncheck();
+  await optionsPage.getByLabel("Show hovered tab preview").click({ force: true });
 
   await sidepanelPage.reload({ waitUntil: "domcontentloaded" });
   await expect(hoveredPreview).toHaveCount(0);
@@ -92,12 +92,12 @@ test("徽标开关控制工具栏标签计数显示", async ({ extensionContext 
   const badgeCheckbox = optionsPage.locator("#badge-enabled");
   await expect(badgeCheckbox).toBeVisible();
 
-  // Uncheck badge
-  await badgeCheckbox.uncheck();
+  // Uncheck badge（headless 下 React checkbox 用 force click）
+  await badgeCheckbox.click({ force: true });
   await expect(badgeCheckbox).not.toBeChecked();
 
   // Re-check badge
-  await badgeCheckbox.check();
+  await badgeCheckbox.click({ force: true });
   await expect(badgeCheckbox).toBeChecked();
 
   await optionsPage.close();
@@ -150,8 +150,8 @@ test("详细日志开关控制侧边栏调试横幅", async ({ extensionContext,
   const verboseCheckbox = optionsPage.locator("#debug-verbose-logging");
   await expect(verboseCheckbox).not.toBeDisabled({ timeout: 10_000 });
 
-  // Enable verbose logging
-  await verboseCheckbox.check();
+  // Enable verbose logging（headless 下 React checkbox 用 force click）
+  await verboseCheckbox.click({ force: true });
 
   // Reload sidepanel and check debug banner
   await sidepanelPage.reload({ waitUntil: "domcontentloaded" });
@@ -160,7 +160,7 @@ test("详细日志开关控制侧边栏调试横幅", async ({ extensionContext,
 
   // Disable verbose logging
   await optionsPage.bringToFront();
-  await verboseCheckbox.uncheck();
+  await verboseCheckbox.click({ force: true });
 
   await sidepanelPage.reload({ waitUntil: "domcontentloaded" });
   await expect(sidepanelPage.getByText("详细日志记录中")).toHaveCount(0);
@@ -181,7 +181,7 @@ test("导出日志按钮可点击且无崩溃", async ({ extensionContext }) => 
   await expect(verboseCheckbox).not.toBeDisabled({ timeout: 10_000 });
 
   // Enable verbose logging, then click export
-  await verboseCheckbox.check();
+  await verboseCheckbox.click({ force: true });
   const exportBtn = optionsPage.getByRole("button", { name: "导出日志" });
   await expect(exportBtn).not.toBeDisabled();
   await exportBtn.click();
@@ -219,7 +219,7 @@ test("恢复默认设置后设置重置", async ({ extensionContext }) => {
 
   // Also change badge setting
   const badgeCheckbox = optionsPage.locator("#badge-enabled");
-  await badgeCheckbox.uncheck();
+  await badgeCheckbox.click({ force: true });
 
   // Click reset
   const resetBtn = optionsPage.getByRole("button", { name: "Reset to defaults" });

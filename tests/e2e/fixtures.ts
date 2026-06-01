@@ -20,13 +20,17 @@ export type E2eFixture = {
 
 export const test = base.extend<E2eFixture>({
   extensionContext: async ({}, use) => {
+    const isCI = Boolean(process.env.CI);
     const userDataDir = await mkdtemp(resolve(tmpdir(), "sidepanel-e2e-"));
     const context = await chromium.launchPersistentContext(userDataDir, {
-      channel: "chromium",
-      headless: false,
+      executablePath:
+        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+        "/home/ff/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome",
+      headless: true,
       args: [
         `--disable-extensions-except=${distDir}`,
-        `--load-extension=${distDir}`
+        `--load-extension=${distDir}`,
+        ...(isCI ? ["--no-sandbox", "--disable-gpu"] : [])
       ]
     });
 

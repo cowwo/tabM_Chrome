@@ -26,6 +26,7 @@ export function createPanelPortAdapter(options: PanelPortAdapterOptions): PanelP
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let activePort: chrome.runtime.Port | null = null;
   let pendingTraceRequest: {
+    timeoutId: ReturnType<typeof setTimeout>;
     resolve: (payload: TraceBundlePayload) => void;
     reject: (error: Error) => void;
   } | null = null;
@@ -38,14 +39,53 @@ export function createPanelPortAdapter(options: PanelPortAdapterOptions): PanelP
   };
 
   const rejectPendingTraceRequest = (error: Error): void => {
-    pendingTraceRequest?.reject(error);
+    if (pendingTraceRequest == null) {
+      return;
+    }
+
+    const pending = pendingTraceRequest;
     pendingTraceRequest = null;
+    clearTimeout(pending.timeoutId);
+    pending.reject(error);
+  };
+
+  const resolvePendingTraceRequest = (payload: TraceBundlePayload): void => {
+    if (pendingTraceRequest == null) {
+      return;
+    }
+
+    const pending = pendingTraceRequest;
+    pendingTraceRequest = null;
+    clearTimeout(pending.timeoutId);
+    pending.resolve(payload);
+  };
+
+  const detachActivePort = (): void => {
+    if (activePort == null) {
+      return;
+    }
+
+    const port = activePort;
+    activePort = null;
+    port.onMessage.removeListener(handleMessage);
+    port.onDisconnect.removeListener(handleDisconnect);
+  };
+
+  const handlePortFailure = (error: Error): void => {
+    detachActivePort();
+    rejectPendingTraceRequest(error);
+
+    if (disposed) {
+      return;
+    }
+
+    options.onDisconnected();
+    scheduleReconnect();
   };
 
   const handleMessage = (message: BackgroundToPanelMessage): void => {
     if (message.type === "debug/trace") {
-      pendingTraceRequest?.resolve(message.payload);
-      pendingTraceRequest = null;
+      resolvePendingTraceRequest(message.payload);
     }
 
     options.onMessage(message);
@@ -63,20 +103,7 @@ export function createPanelPortAdapter(options: PanelPortAdapterOptions): PanelP
   };
 
   const handleDisconnect = (): void => {
-    if (activePort) {
-      activePort.onMessage.removeListener(handleMessage);
-      activePort.onDisconnect.removeListener(handleDisconnect);
-      activePort = null;
-    }
-
-    rejectPendingTraceRequest(new Error("后台连接已断开"));
-
-    if (disposed) {
-      return;
-    }
-
-    options.onDisconnected();
-    scheduleReconnect();
+    handlePortFailure(new Error("后台连接已断开"));
   };
 
   const connect = (): void => {
@@ -106,13 +133,11 @@ export function createPanelPortAdapter(options: PanelPortAdapterOptions): PanelP
       rejectPendingTraceRequest(new Error("后台连接已断开"));
 
       const port = activePort;
-      activePort = null;
+      detachActivePort();
       if (!port) {
         return;
       }
 
-      port.onMessage.removeListener(handleMessage);
-      port.onDisconnect.removeListener(handleDisconnect);
       port.disconnect();
     },
     postMessage(message: PanelToBackgroundMessage): boolean {
@@ -120,8 +145,13 @@ export function createPanelPortAdapter(options: PanelPortAdapterOptions): PanelP
         return false;
       }
 
-      activePort.postMessage(message);
-      return true;
+      try {
+        activePort.postMessage(message);
+        return true;
+      } catch {
+        handlePortFailure(new Error("后台连接已断开"));
+        return false;
+      }
     },
     async requestTraceBundle(): Promise<TraceBundlePayload> {
       const port = activePort;
@@ -129,26 +159,28 @@ export function createPanelPortAdapter(options: PanelPortAdapterOptions): PanelP
         throw new Error("后台连接不可用");
       }
 
+      if (pendingTraceRequest != null) {
+        throw new Error("调试日志请求正在进行");
+      }
+
       return await new Promise<TraceBundlePayload>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          pendingTraceRequest = null;
-          reject(new Error("获取调试日志超时"));
+        const timeoutId = setTimeout(() => {
+          rejectPendingTraceRequest(new Error("获取调试日志超时"));
         }, 5000);
 
         pendingTraceRequest = {
-          resolve: (payload) => {
-          clearTimeout(timeout);
-            resolve(payload);
-          },
-          reject: (error) => {
-          clearTimeout(timeout);
-            reject(error);
-          }
+          timeoutId,
+          resolve,
+          reject
         };
 
-        port.postMessage({
-          type: "debug/get-trace"
-        } satisfies PanelToBackgroundMessage);
+        try {
+          port.postMessage({
+            type: "debug/get-trace"
+          } satisfies PanelToBackgroundMessage);
+        } catch {
+          handlePortFailure(new Error("后台连接已断开"));
+        }
       });
     }
   };

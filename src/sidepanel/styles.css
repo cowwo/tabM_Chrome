@@ -447,6 +447,15 @@ button:focus-visible {
   color: #1d3fa8;
 }
 
+.reconnecting-state {
+  display: grid;
+  gap: 4px;
+  margin: 0 16px 8px;
+  padding: 12px;
+  background: #fff8e7;
+  color: #8a6d14;
+}
+
 .loading-state__title,
 .loading-state__body,
 .empty-state__title,
@@ -459,7 +468,9 @@ button:focus-visible {
 .error-state__hint,
 .debug-state__title,
 .debug-state__body,
-.debug-state__hint {
+.debug-state__hint,
+.reconnecting-state__title,
+.reconnecting-state__body {
   margin: 0;
 }
 
@@ -467,7 +478,8 @@ button:focus-visible {
 .empty-state__title,
 .fatal-error__title,
 .error-state__title,
-.debug-state__title {
+.debug-state__title,
+.reconnecting-state__title {
   font-size: var(--window-row-meta-font-size);
   font-weight: 600;
 }
@@ -479,7 +491,8 @@ button:focus-visible {
 .error-state__body,
 .error-state__hint,
 .debug-state__body,
-.debug-state__hint {
+.debug-state__hint,
+.reconnecting-state__body {
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -490,6 +503,10 @@ button:focus-visible {
 
 .error-state__hint {
   color: rgba(196, 73, 60, 0.84);
+}
+
+.reconnecting-state__body {
+  color: #8a6d14;
 }
 
 .duplicate-toast {

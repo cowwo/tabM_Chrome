@@ -11,7 +11,9 @@ export function SidepanelStatus({
   traceUpdatedAt,
   onCopyDebugTrace,
   copyTraceState,
-  duplicateToast
+  duplicateToast,
+  hasUsableSnapshot,
+  totalTabCount
 }: {
   locale: SupportedLocale;
   errorMessage: string | null;
@@ -24,6 +26,8 @@ export function SidepanelStatus({
   onCopyDebugTrace?: () => void;
   copyTraceState?: "idle" | "success" | "error";
   duplicateToast?: string | null;
+  hasUsableSnapshot?: boolean;
+  totalTabCount?: number;
 }) {
   if (isLoading) {
     return (
@@ -34,6 +38,24 @@ export function SidepanelStatus({
             ? translate(locale, "sidepanel.loading.bodyResync")
             : translate(locale, "sidepanel.loading.body")}
         </p>
+      </div>
+    );
+  }
+
+  if (!isInteractive && !errorMessage) {
+    return (
+      <div className="reconnecting-state" aria-live="polite">
+        <p className="reconnecting-state__title">{translate(locale, "sidepanel.reconnecting.title")}</p>
+        <p className="reconnecting-state__body">{translate(locale, "sidepanel.reconnecting.body")}</p>
+      </div>
+    );
+  }
+
+  if (hasUsableSnapshot && totalTabCount === 0) {
+    return (
+      <div className="empty-state" aria-live="polite">
+        <p className="empty-state__title">{translate(locale, "sidepanel.list.emptyTitle")}</p>
+        <p className="empty-state__body">{translate(locale, "sidepanel.list.emptyBody")}</p>
       </div>
     );
   }
