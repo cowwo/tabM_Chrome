@@ -655,6 +655,7 @@ export function VirtualizedWindowList({
     if (shouldClearSelectionOnPointerDown({
       row,
       selectedTabIds: currentSelectedTabIds,
+      selectionMode,
       pointerGesture
     })) {
       handleClearSelection();
@@ -693,7 +694,7 @@ export function VirtualizedWindowList({
       origin: createPointerPosition(event),
       source: confirmedSource
     });
-  }, [disabled, handleClearSelection]);
+  }, [disabled, handleClearSelection, selectionMode]);
 
 
   const handlePointerEnter = useCallback((_row: PanelRow, _event: React.PointerEvent<HTMLElement>): void => {

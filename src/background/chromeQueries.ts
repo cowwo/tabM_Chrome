@@ -8,6 +8,7 @@ export interface ChromeQueriesApi {
     getLastFocused(): Promise<{
       id?: number;
     }>;
+    getAll(): Promise<Array<{ id?: number }>>;
   };
   tabs: {
     query(queryInfo: {
@@ -28,6 +29,17 @@ export async function getLastFocusedWindowId(
     return window.id ?? null;
   } catch {
     return null;
+  }
+}
+
+export async function queryAllWindowIds(
+  chromeApi: Pick<ChromeQueriesApi, "windows"> = chrome
+): Promise<number[]> {
+  try {
+    const windows = await chromeApi.windows.getAll();
+    return windows.map((w) => w.id).filter((id): id is number => id != null);
+  } catch {
+    return [];
   }
 }
 

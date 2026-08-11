@@ -155,6 +155,7 @@ function registerPanelPortListener(): void {
     void (async () => {
       try {
         await ensureInitialized();
+        await purgeStaleWindowsFromChrome();
         await windowSyncCoordinator.runAfterCurrentCycle({
           cause: "panel/connect",
           task: async () => {
@@ -384,6 +385,25 @@ function handlePatch(patch: StorePatch | null): void {
 
   panelPortHub.broadcastPatch(patch);
   scheduleActionBadgeUpdate();
+}
+
+async function purgeStaleWindowsFromChrome(): Promise<void> {
+  const liveWindowIds = await chromeQueryHelpers.queryAllWindowIds();
+  if (liveWindowIds.length === 0) {
+    return;
+  }
+
+  const patches = store.purgeStaleWindows(new Set(liveWindowIds));
+  for (const patch of patches) {
+    handlePatch(patch);
+  }
+
+  if (patches.length > 0) {
+    traceBackgroundEvent("store/purge-stale-windows", {
+      removedWindowCount: patches.length,
+      liveWindowCount: liveWindowIds.length
+    });
+  }
 }
 
 function upsertTabRecord(tab: TabRecord): void {

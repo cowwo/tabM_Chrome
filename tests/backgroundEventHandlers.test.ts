@@ -69,7 +69,7 @@ describe("backgroundEventHandlers", () => {
   });
 
 
-  it("should fall back to window sync when tab updated changes index", async () => {
+  it("should patch-first when tab updated changes index", async () => {
     const deps = createTabEventDeps();
     deps.store.getTab = vi.fn(() => ({
       id: 1,
@@ -98,12 +98,71 @@ describe("backgroundEventHandlers", () => {
       } as chrome.tabs.Tab
     );
 
-    expect(deps.store.upsertTab).not.toHaveBeenCalled();
-    expect(deps.handlePatch).not.toHaveBeenCalled();
-    expect(deps.windowSyncCoordinator.scheduleWindowSync).toHaveBeenCalledWith({
-      windowId: 3,
-      cause: "autocorrect/tabs/onUpdated"
+    expect(deps.store.upsertTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, windowId: 3, index: 2 })
+    );
+    expect(deps.handlePatch).toHaveBeenCalledWith({
+      type: "tab/upsert",
+      tab: expect.objectContaining({ id: 1, index: 2 })
     });
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).not.toHaveBeenCalled();
+    expect(deps.windowSyncCoordinator.scheduleCrossWindowSync).not.toHaveBeenCalled();
+  });
+
+  it("should patch-first migration when tab updated changes window", async () => {
+    const deps = createTabEventDeps();
+    deps.store.getTab = vi.fn(() => ({
+      id: 1,
+      windowId: 3,
+      index: 0,
+      groupId: -1,
+      title: "Old",
+      url: "https://example.com",
+      pinned: false,
+      active: false,
+      audible: false,
+      discarded: false,
+      favIconUrl: null
+    }));
+
+    const handlers = createTabEventHandlers(deps as never);
+    await handlers.onUpdated(
+      1,
+      { title: "New" },
+      {
+        id: 1,
+        windowId: 5,
+        index: 0,
+        url: "https://example.com",
+        title: "New"
+      } as chrome.tabs.Tab
+    );
+
+    expect(deps.store.upsertTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, windowId: 5, index: 0 })
+    );
+    expect(deps.handlePatch).toHaveBeenCalledWith({
+      type: "tab/upsert",
+      tab: expect.objectContaining({ id: 1, windowId: 5 })
+    });
+    expect(deps.windowSyncCoordinator.scheduleCrossWindowSync).not.toHaveBeenCalled();
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).not.toHaveBeenCalled();
+  });
+
+  it("should patch-first for tab removed even when window is closing", async () => {
+    const deps = createTabEventDeps();
+    deps.store.hasTab = vi.fn(() => true);
+
+    const handlers = createTabEventHandlers(deps as never);
+    await handlers.onRemoved(7, { windowId: 9, isWindowClosing: true } as chrome.tabs.TabRemoveInfo);
+
+    expect(deps.store.removeTab).toHaveBeenCalledWith(7, 9);
+    expect(deps.handlePatch).toHaveBeenCalledWith({
+      type: "tab/remove",
+      tabId: 7,
+      windowId: 9
+    });
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).not.toHaveBeenCalled();
   });
 
   it("should patch-first for tab removed when tab exists", async () => {
@@ -137,17 +196,93 @@ describe("backgroundEventHandlers", () => {
     });
   });
 
-  it("should schedule cross-window sync for tab attached", () => {
+  it("should patch-first migration when attached tab exists in store", async () => {
+    const deps = createTabEventDeps();
+    deps.store.getTab = vi.fn(() => ({
+      id: 7,
+      windowId: 2,
+      index: 4,
+      groupId: -1,
+      title: "T",
+      url: "https://example.com",
+      pinned: false,
+      active: false,
+      audible: false,
+      discarded: false,
+      favIconUrl: null
+    }));
+    deps.detachedTabWindowIds.set(7, 2);
+
+    const handlers = createTabEventHandlers(deps as never);
+    await handlers.onAttached(7, { newWindowId: 9, newPosition: 0 });
+
+    expect(deps.store.upsertTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7, windowId: 9, index: 0 })
+    );
+    expect(deps.handlePatch).toHaveBeenCalledWith({
+      type: "tab/upsert",
+      tab: expect.objectContaining({ id: 7, windowId: 9, index: 0 })
+    });
+    expect(deps.windowSyncCoordinator.scheduleCrossWindowSync).not.toHaveBeenCalled();
+    expect(deps.detachedTabWindowIds.has(7)).toBe(false);
+  });
+
+  it("should schedule cross-window sync for tab attached when tab missing from store", async () => {
     const deps = createTabEventDeps();
     deps.detachedTabWindowIds.set(7, 2);
 
     const handlers = createTabEventHandlers(deps as never);
-    handlers.onAttached(7, { newWindowId: 9, newPosition: 0 });
+    await handlers.onAttached(7, { newWindowId: 9, newPosition: 0 });
 
+    expect(deps.store.upsertTab).not.toHaveBeenCalled();
+    expect(deps.handlePatch).not.toHaveBeenCalled();
     expect(deps.windowSyncCoordinator.scheduleCrossWindowSync).toHaveBeenCalledWith({
       sourceWindowId: 2,
       targetWindowId: 9,
       cause: "tabs/onAttached"
+    });
+  });
+
+  it("should patch-first index update when moved tab exists in store", async () => {
+    const deps = createTabEventDeps();
+    deps.store.getTab = vi.fn(() => ({
+      id: 7,
+      windowId: 9,
+      index: 1,
+      groupId: -1,
+      title: "T",
+      url: "https://example.com",
+      pinned: false,
+      active: false,
+      audible: false,
+      discarded: false,
+      favIconUrl: null
+    }));
+
+    const handlers = createTabEventHandlers(deps as never);
+    await handlers.onMoved(7, { windowId: 9, fromIndex: 1, toIndex: 3 });
+
+    expect(deps.store.upsertTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7, windowId: 9, index: 3 })
+    );
+    expect(deps.handlePatch).toHaveBeenCalledWith({
+      type: "tab/upsert",
+      tab: expect.objectContaining({ id: 7, windowId: 9, index: 3 })
+    });
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).not.toHaveBeenCalled();
+  });
+
+  it("should schedule window sync for tab moved when tab missing from store", async () => {
+    const deps = createTabEventDeps();
+
+    const handlers = createTabEventHandlers(deps as never);
+    await handlers.onMoved(7, { windowId: 9, fromIndex: 1, toIndex: 3 });
+
+    expect(deps.store.upsertTab).not.toHaveBeenCalled();
+    expect(deps.handlePatch).not.toHaveBeenCalled();
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).toHaveBeenCalledWith({
+      windowId: 9,
+      cause: "tabs/onMoved"
     });
   });
 

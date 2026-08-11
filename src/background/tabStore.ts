@@ -1,4 +1,4 @@
-import { createSnapshot, createStateFromTabs, createEmptyState, applyPatch } from "../shared/domain/tabState";
+import { createSnapshot, createStateFromTabs, createEmptyState, applyPatch, purgeStaleWindows } from "../shared/domain/tabState";
 import type { StorePatch, TabGroupRecord, TabRecord, TabStoreSnapshot, TabStoreState } from "../shared/types";
 
 export interface BackgroundTabStore {
@@ -15,6 +15,7 @@ export interface BackgroundTabStore {
   focusWindow(windowId: number | null): StorePatch | null;
   removeWindow(windowId: number): StorePatch | null;
   setActiveTab(windowId: number, tabId: number): StorePatch[];
+  purgeStaleWindows(liveWindowIds: ReadonlySet<number>): StorePatch[];
 }
 
 export function createBackgroundTabStore(): BackgroundTabStore {
@@ -136,6 +137,23 @@ export function createBackgroundTabStore(): BackgroundTabStore {
             ...next,
             active: true
           }
+        });
+        if (patch) {
+          patches.push(patch);
+        }
+      }
+
+      return patches;
+    },
+
+    purgeStaleWindows(liveWindowIds) {
+      const patches: StorePatch[] = [];
+      const staleWindowIds = state.windowOrder.filter((id) => !liveWindowIds.has(id));
+
+      for (const windowId of staleWindowIds) {
+        const patch = commitPatch({
+          type: "window/remove",
+          windowId
         });
         if (patch) {
           patches.push(patch);

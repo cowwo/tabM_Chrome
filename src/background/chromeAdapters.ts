@@ -1,6 +1,7 @@
 import {
   getLastFocusedWindowId,
   queryAllTabGroupsForTabs,
+  queryAllWindowIds,
   queryGroups,
   queryNormalizedGroup,
   queryNormalizedTabsInGroup,
@@ -10,13 +11,14 @@ import type { TabGroupRecord, TabRecord } from "../shared/types";
 
 export interface ChromeApi {
   tabs: Pick<typeof chrome.tabs, "query">;
-  windows: Pick<typeof chrome.windows, "getLastFocused">;
+  windows: Pick<typeof chrome.windows, "getLastFocused" | "getAll">;
   tabGroups: Pick<typeof chrome.tabGroups, "get">;
 }
 
 export interface ChromeQueryHelpers {
   queryTabs: () => Promise<chrome.tabs.Tab[]>;
   queryFocusedWindowId: () => Promise<number | null>;
+  queryAllWindowIds: () => Promise<number[]>;
   queryAllTabGroupsForTabs: (tabs: readonly chrome.tabs.Tab[]) => Promise<TabGroupRecord[]>;
   queryGroups: (groupIds: readonly number[]) => Promise<TabGroupRecord[]>;
   queryNormalizedGroup: (
@@ -41,6 +43,7 @@ export function createChromeQueryHelpers(chromeApi: ChromeApi = chrome): ChromeQ
   return {
     queryTabs: () => chromeApi.tabs.query({}),
     queryFocusedWindowId: () => getLastFocusedWindowId(chromeApi),
+    queryAllWindowIds: () => queryAllWindowIds(chromeApi),
     queryAllTabGroupsForTabs: (tabs) => queryAllTabGroupsForTabs(tabs, chromeApi),
     queryGroups: (groupIds) => queryGroups(groupIds, chromeApi),
     queryNormalizedGroup: (groupId, providedGroup) => queryNormalizedGroup(groupId, providedGroup, chromeApi),
