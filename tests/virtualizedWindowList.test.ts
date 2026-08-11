@@ -231,11 +231,27 @@ describe("VirtualizedWindowList helpers", () => {
     ).toBe(false);
   });
 
+  it("does not clear existing selection on pointer down while selection mode is active", () => {
+    expect(
+      shouldClearSelectionOnPointerDown({
+        row: makeTabRow({ tab: makeTab({ id: 2, index: 1 }) }),
+        selectedTabIds: new Set([1]),
+        selectionMode: true,
+        pointerGesture: {
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false
+        }
+      })
+    ).toBe(false);
+  });
+
   it("does not clear existing selection on pointer down when a multi-select modifier is held", () => {
     expect(
       shouldClearSelectionOnPointerDown({
         row: makeTabRow({ tab: makeTab({ id: 2, index: 1 }) }),
         selectedTabIds: new Set([1]),
+        selectionMode: false,
         pointerGesture: {
           ctrlKey: true,
           metaKey: false,

@@ -33,7 +33,9 @@ export function createStateFromTabs(
   for (const tab of tabs) {
     tabsById[tab.id] = tab;
     const bucket = windowTabIds[tab.windowId] ?? [];
-    bucket.push(tab.id);
+    if (!bucket.includes(tab.id)) {
+      bucket.push(tab.id);
+    }
     windowTabIds[tab.windowId] = bucket;
   }
 
@@ -205,6 +207,22 @@ export function removeWindow(state: TabStoreState, windowId: number): TabStoreSt
     windowOrder,
     groupsById,
     focusedWindowId
+  };
+}
+
+export function purgeStaleWindows(
+  state: TabStoreState,
+  liveWindowIds: ReadonlySet<number>
+): { state: TabStoreState; removedWindowIds: number[] } {
+  const staleWindowIds = state.windowOrder.filter((id) => !liveWindowIds.has(id));
+
+  if (staleWindowIds.length === 0) {
+    return { state, removedWindowIds: [] };
+  }
+
+  return {
+    state: staleWindowIds.reduce(removeWindow, state),
+    removedWindowIds: staleWindowIds
   };
 }
 

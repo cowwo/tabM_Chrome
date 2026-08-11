@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getLastFocusedWindowId,
   queryAllTabGroupsForTabs,
+  queryAllWindowIds,
   queryGroups,
   queryNormalizedGroup,
   queryNormalizedTabsInGroup,
@@ -41,10 +42,35 @@ describe("chromeQueries", () => {
         windows: {
           getLastFocused: vi.fn(async () => {
             throw new Error("boom");
-          })
+          }),
+          getAll: vi.fn(async () => [])
         }
       })
     ).resolves.toBeNull();
+  });
+
+  it("should return window ids from getAll", async () => {
+    await expect(
+      queryAllWindowIds({
+        windows: {
+          getLastFocused: vi.fn(),
+          getAll: vi.fn(async () => [{ id: 1 }, { id: 2 }, { id: 3 }])
+        }
+      })
+    ).resolves.toEqual([1, 2, 3]);
+  });
+
+  it("should return empty array when getAll fails", async () => {
+    await expect(
+      queryAllWindowIds({
+        windows: {
+          getLastFocused: vi.fn(),
+          getAll: vi.fn(async () => {
+            throw new Error("boom");
+          })
+        }
+      })
+    ).resolves.toEqual([]);
   });
 
   it("should deduplicate group ids before querying", async () => {

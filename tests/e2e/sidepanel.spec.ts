@@ -467,17 +467,70 @@ test("选择模式：工具栏按钮切换选择模式", async ({ extensionConte
 
   await sidepanelPage.bringToFront();
 
+  const selectionStartButton = sidepanelPage.getByRole("button", { name: /^(选择|Select)$/ });
+  const selectionCancelButton = sidepanelPage.getByRole("button", { name: /^(取消多选|Cancel multi-select)$/ });
+  const selectionSummary = sidepanelPage.locator(".panel-toolbar__selection");
+
   // Not in selection mode initially
-  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toHaveCount(0);
+  await expect(selectionCancelButton).toHaveCount(0);
 
   // Enter selection mode
-  await sidepanelPage.getByRole("button", { name: /^选择$/ }).click();
-  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toBeVisible();
-  await expect(sidepanelPage.getByText("已选 0 项")).toBeVisible();
+  await selectionStartButton.click();
+  await expect(selectionCancelButton).toBeVisible();
+  await expect(selectionSummary).toHaveCount(0);
 
   // Exit selection mode
-  await sidepanelPage.getByRole("button", { name: /^取消多选$/ }).click();
-  await expect(sidepanelPage.getByRole("button", { name: /^取消多选$/ })).toHaveCount(0);
+  await selectionCancelButton.click();
+  await expect(selectionCancelButton).toHaveCount(0);
+});
+
+test("选择模式：普通点击可在多选模式下累积选择", async ({ extensionContext, sidepanelPage, sidepanelApi }) => {
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  for (let i = 0; i < 3; i++) {
+    const page = await extensionContext.newPage();
+    await page.goto(createLocalPageUrl(`plain-sel-${uniqueSuffix}-${i}`));
+    await page.waitForLoadState("load");
+  }
+
+  await waitForSnapshot(
+    sidepanelApi,
+    (snapshot) => getSnapshotTabs(snapshot).filter((t) => t.url?.includes(`plain-sel-${uniqueSuffix}`)).length >= 3
+  );
+
+  await sidepanelPage.bringToFront();
+
+  const selectionStartButton = sidepanelPage.getByRole("button", { name: /^(选择|Select)$/ });
+  const selectionCancelButton = sidepanelPage.getByRole("button", { name: /^(取消多选|Cancel multi-select)$/ });
+  const selectedSummary = sidepanelPage.locator(".panel-toolbar__selection");
+
+  await selectionStartButton.click();
+  await expect(selectionCancelButton).toBeVisible();
+
+  const searchInput = sidepanelPage.locator(".search-bar__input");
+  await expect(searchInput).toBeVisible({ timeout: 5_000 });
+  await searchInput.fill(uniqueSuffix);
+
+  const selectedRows = sidepanelPage.locator('button.tab-row__main[aria-selected="true"]');
+  const firstTabRow = sidepanelPage.locator(".tab-row", {
+    has: sidepanelPage.locator(".tab-row__title", { hasText: `page-plain-sel-${uniqueSuffix}-0` })
+  }).first();
+  const secondTabRow = sidepanelPage.locator(".tab-row", {
+    has: sidepanelPage.locator(".tab-row__title", { hasText: `page-plain-sel-${uniqueSuffix}-1` })
+  }).first();
+  const firstTabMain = firstTabRow.locator("button.tab-row__main");
+  const secondTabMain = secondTabRow.locator("button.tab-row__main");
+
+  await expect(firstTabMain).toBeVisible({ timeout: 5_000 });
+  await expect(secondTabMain).toBeVisible({ timeout: 5_000 });
+
+  await firstTabMain.click();
+  await expect(selectedRows).toHaveCount(1);
+  await expect(selectedSummary).toContainText(/^(已选 1 项|Selected 1)$/);
+
+  await secondTabMain.click();
+  await expect(selectedRows).toHaveCount(2);
+  await expect(selectedSummary).toContainText(/^(已选 2 项|Selected 2)$/);
+  await expect(selectionCancelButton).toBeVisible();
 });
 
 test("选择模式：Ctrl+点击切换标签选中状态", async ({ extensionContext, sidepanelPage, sidepanelApi }) => {
@@ -544,7 +597,7 @@ test("选择模式：Shift+点击范围选择多个标签", async ({ extensionCo
   }
   expect(testRowElements.length).toBeGreaterThanOrEqual(3);
 
-  const selectedRows = sidepanelPage.locator(".tab-row.tab-row--selected");
+  const selectedRows = sidepanelPage.locator('button.tab-row__main[aria-selected="true"]');
   const selectedSummary = sidepanelPage.locator(".panel-toolbar__selection");
 
   // Ctrl+click first to set anchor
@@ -600,7 +653,7 @@ test("关闭选中的标签后从快照中移除", async ({ extensionContext, si
     (snapshot) => getSnapshotTabs(snapshot).filter((t) => t.url?.includes(`close-sel-${uniqueSuffix}`)).length >= 3
   );
 
-  const selectedRows = sidepanelPage.locator(".tab-row.tab-row--selected");
+  const selectedRows = sidepanelPage.locator('button.tab-row__main[aria-selected="true"]');
   const selectedSummary = sidepanelPage.locator(".panel-toolbar__selection");
 
   // Select all 3 tabs via Ctrl+click

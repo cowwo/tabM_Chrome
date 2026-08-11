@@ -69,26 +69,6 @@ export function createTabEventHandlers(deps: Pick<
     });
   };
 
-  const scheduleAutoCrossWindowSync = (params: {
-    sourceWindowId: number;
-    targetWindowId: number;
-    cause: string;
-    tabId: number;
-  }): void => {
-    deps.traceBackgroundEvent("autocorrect/window-resync", {
-      sourceWindowId: params.sourceWindowId,
-      targetWindowId: params.targetWindowId,
-      cause: params.cause,
-      reason: "window-changed",
-      tabId: params.tabId
-    });
-    void deps.windowSyncCoordinator.scheduleCrossWindowSync({
-      sourceWindowId: params.sourceWindowId,
-      targetWindowId: params.targetWindowId,
-      cause: `autocorrect/${params.cause}`
-    });
-  };
-
   const ensureKnownGroup = async (tab: TabRecord, cause: string): Promise<void> => {
     if (tab.groupId === NO_TAB_GROUP_ID || deps.store.getGroup(tab.groupId)) {
       return;
@@ -124,30 +104,6 @@ export function createTabEventHandlers(deps: Pick<
         reason: "normalize-failed",
         tabId: tab.id ?? null,
         groupId: tab.groupId ?? null
-      });
-      return;
-    }
-
-    const existingTab = deps.store.getTab(normalizedTab.id);
-    if (existingTab && existingTab.windowId !== normalizedTab.windowId) {
-      scheduleAutoCrossWindowSync({
-        sourceWindowId: existingTab.windowId,
-        targetWindowId: normalizedTab.windowId,
-        cause,
-        tabId: normalizedTab.id
-      });
-      return;
-    }
-
-    if (existingTab && existingTab.index !== normalizedTab.index) {
-      scheduleAutoWindowSync({
-        windowId: normalizedTab.windowId,
-        cause,
-        reason: "index-changed",
-        tabId: normalizedTab.id,
-        groupId: normalizedTab.groupId,
-        previousIndex: existingTab.index,
-        nextIndex: normalizedTab.index
       });
       return;
     }
@@ -247,9 +203,21 @@ export function createTabEventHandlers(deps: Pick<
         fromIndex: moveInfo.fromIndex,
         toIndex: moveInfo.toIndex
       });
-      void deps.windowSyncCoordinator.scheduleWindowSync({
-        windowId: moveInfo.windowId,
-        cause: "tabs/onMoved"
+      void deps.enqueueStoreTask(async () => {
+        await deps.ensureInitialized();
+        const existingTab = deps.store.getTab(tabId);
+        if (existingTab) {
+          deps.handlePatch(deps.store.upsertTab({
+            ...existingTab,
+            windowId: moveInfo.windowId,
+            index: moveInfo.toIndex
+          }));
+        } else {
+          void deps.windowSyncCoordinator.scheduleWindowSync({
+            windowId: moveInfo.windowId,
+            cause: "tabs/onMoved"
+          });
+        }
       });
     },
     onAttached: (tabId, attachInfo) => {
@@ -262,10 +230,22 @@ export function createTabEventHandlers(deps: Pick<
       const previousWindowId = deps.detachedTabWindowIds.get(tabId) ?? null;
       deps.detachedTabWindowIds.delete(tabId);
 
-      void deps.windowSyncCoordinator.scheduleCrossWindowSync({
-        sourceWindowId: previousWindowId,
-        targetWindowId: attachInfo.newWindowId,
-        cause: "tabs/onAttached"
+      void deps.enqueueStoreTask(async () => {
+        await deps.ensureInitialized();
+        const existingTab = deps.store.getTab(tabId);
+        if (existingTab) {
+          deps.handlePatch(deps.store.upsertTab({
+            ...existingTab,
+            windowId: attachInfo.newWindowId,
+            index: attachInfo.newPosition
+          }));
+        } else {
+          void deps.windowSyncCoordinator.scheduleCrossWindowSync({
+            sourceWindowId: previousWindowId,
+            targetWindowId: attachInfo.newWindowId,
+            cause: "tabs/onAttached"
+          });
+        }
       });
     },
     onDetached: (tabId, detachInfo) => {
@@ -282,10 +262,6 @@ export function createTabEventHandlers(deps: Pick<
         windowId: removeInfo.windowId,
         isWindowClosing: removeInfo.isWindowClosing
       });
-      if (removeInfo.isWindowClosing) {
-        return;
-      }
-
       void deps.enqueueStoreTask(() => applyPatchFirstTabRemove(tabId, removeInfo));
     },
     onActivated: (activeInfo) => {

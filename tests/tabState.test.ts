@@ -1,4 +1,4 @@
-import { applyPatch, createStateFromTabs, removeTabRecord, upsertTabRecord } from "../src/shared/domain/tabState";
+import { applyPatch, createStateFromTabs, purgeStaleWindows, removeTabRecord, upsertTabRecord } from "../src/shared/domain/tabState";
 import { NO_TAB_GROUP_ID } from "../src/shared/defaults";
 import type { TabRecord } from "../src/shared/types";
 
@@ -219,5 +219,97 @@ describe("tab state", () => {
     expect(next.windowOrder).toEqual([1, 3]);
     expect(next.focusedWindowId).toBe(1);
     expect(next.tabsById[2]).toBeUndefined();
+  });
+
+  it("deduplicates tab ids in windowTabIds when the same tab appears multiple times", () => {
+    const state = createStateFromTabs(
+      [
+        makeTab({ id: 1, windowId: 1, index: 0 }),
+        makeTab({ id: 1, windowId: 1, index: 0 }),
+        makeTab({ id: 2, windowId: 1, index: 1 })
+      ],
+      1
+    );
+
+    expect(state.windowTabIds[1]).toEqual([1, 2]);
+    expect(Object.keys(state.tabsById)).toHaveLength(2);
+  });
+
+  describe("purgeStaleWindows", () => {
+    it("returns the same state when all windows are live", () => {
+      const state = createStateFromTabs(
+        [
+          makeTab({ id: 1, windowId: 1, index: 0 }),
+          makeTab({ id: 2, windowId: 2, index: 0 })
+        ],
+        1
+      );
+
+      const result = purgeStaleWindows(state, new Set([1, 2]));
+
+      expect(result.state).toBe(state);
+      expect(result.removedWindowIds).toEqual([]);
+    });
+
+    it("removes windows that are not in the live set", () => {
+      const state = createStateFromTabs(
+        [
+          makeTab({ id: 1, windowId: 1, index: 0 }),
+          makeTab({ id: 2, windowId: 2, index: 0 }),
+          makeTab({ id: 3, windowId: 3, index: 0 })
+        ],
+        2
+      );
+
+      const result = purgeStaleWindows(state, new Set([2]));
+
+      expect(result.removedWindowIds).toEqual([1, 3]);
+      expect(result.state.windowOrder).toEqual([2]);
+      expect(result.state.tabsById[1]).toBeUndefined();
+      expect(result.state.tabsById[2]).toBeDefined();
+      expect(result.state.tabsById[3]).toBeUndefined();
+      expect(result.state.windowTabIds[1]).toBeUndefined();
+      expect(result.state.windowTabIds[3]).toBeUndefined();
+    });
+
+    it("removes groups belonging to stale windows", () => {
+      const state = createStateFromTabs(
+        [
+          makeTab({ id: 1, windowId: 1, index: 0 }),
+          makeTab({ id: 2, windowId: 2, index: 0, groupId: 10 })
+        ],
+        1,
+        [
+          { id: 10, windowId: 2, title: "G", color: "blue", collapsed: false }
+        ]
+      );
+
+      const result = purgeStaleWindows(state, new Set([1]));
+
+      expect(result.state.groupsById[10]).toBeUndefined();
+    });
+
+    it("redirects focus when the focused window is stale", () => {
+      const state = createStateFromTabs(
+        [
+          makeTab({ id: 1, windowId: 1, index: 0 }),
+          makeTab({ id: 2, windowId: 2, index: 0 })
+        ],
+        1
+      );
+
+      const result = purgeStaleWindows(state, new Set([2]));
+
+      expect(result.state.focusedWindowId).toBe(2);
+    });
+
+    it("returns empty removedWindowIds for an empty state", () => {
+      const state = createStateFromTabs([], null);
+
+      const result = purgeStaleWindows(state, new Set([1, 2]));
+
+      expect(result.state).toBe(state);
+      expect(result.removedWindowIds).toEqual([]);
+    });
   });
 });

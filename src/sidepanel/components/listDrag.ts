@@ -586,13 +586,18 @@ export function shouldHandleSelectionGestureOnPointerDown(params: {
 export function shouldClearSelectionOnPointerDown(params: {
   row: PanelRow;
   selectedTabIds: ReadonlySet<number>;
+  selectionMode?: boolean;
   pointerGesture: {
     ctrlKey: boolean;
     metaKey: boolean;
     shiftKey: boolean;
   };
 }): boolean {
-  const { row, selectedTabIds, pointerGesture } = params;
+  const { row, selectedTabIds, selectionMode, pointerGesture } = params;
+
+  if (selectionMode) {
+    return false;
+  }
 
   if (pointerGesture.ctrlKey || pointerGesture.metaKey || pointerGesture.shiftKey) {
     return false;
