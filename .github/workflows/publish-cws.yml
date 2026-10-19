@@ -1,0 +1,90 @@
+name: Publish to Chrome Web Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "上传后是否提交审核（false = 只上传草稿，不发布）"
+        required: true
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-chrome-web-store
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check (app)
+        run: npm run typecheck:app
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Verify version consistency
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          MANIFEST_VERSION=$(node -p "require('./dist/manifest.json').version")
+          if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::package.json 版本($VERSION) 与 dist/manifest.json 版本($MANIFEST_VERSION) 不一致"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$TAG_VERSION" != "$VERSION" ]; then
+              echo "::error::tag($GITHUB_REF_NAME) 与 package.json 版本($VERSION) 不一致"
+              exit 1
+            fi
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Zip dist
+        run: cd dist && zip -r "../tabM_Chrome-${VERSION}.zip" .
+
+      - name: Upload to Chrome Web Store
+        env:
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          EXTENSION_ID: opkneceipnbmefldophhfdjafmejoaae
+        run: |
+          npx --yes --package=chrome-webstore-upload-cli@4 chrome-webstore-upload upload \
+            --source "tabM_Chrome-${VERSION}.zip" \
+            --extension-id "$EXTENSION_ID"
+
+      - name: Submit for review
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        env:
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          EXTENSION_ID: opkneceipnbmefldophhfdjafmejoaae
+        run: |
+          npx --yes --package=chrome-webstore-upload-cli@4 chrome-webstore-upload publish \
+            --extension-id "$EXTENSION_ID" \
+            --deploy-percentage 100
