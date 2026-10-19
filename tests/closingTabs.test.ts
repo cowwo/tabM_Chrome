@@ -18,7 +18,8 @@ function createSnapshot(): TabStoreSnapshot {
         active: false,
         audible: false,
         discarded: false,
-        favIconUrl: null
+        favIconUrl: null,
+        lastAccessed: 0
       },
       2: {
         id: 2,
@@ -31,7 +32,8 @@ function createSnapshot(): TabStoreSnapshot {
         active: true,
         audible: false,
         discarded: false,
-        favIconUrl: null
+        favIconUrl: null,
+        lastAccessed: 0
       },
       3: {
         id: 3,
@@ -44,7 +46,8 @@ function createSnapshot(): TabStoreSnapshot {
         active: false,
         audible: false,
         discarded: false,
-        favIconUrl: null
+        favIconUrl: null,
+        lastAccessed: 0
       },
       4: {
         id: 4,
@@ -57,7 +60,8 @@ function createSnapshot(): TabStoreSnapshot {
         active: false,
         audible: false,
         discarded: false,
-        favIconUrl: null
+        favIconUrl: null,
+        lastAccessed: 0
       }
     },
     windowTabIds: {

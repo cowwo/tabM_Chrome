@@ -35,7 +35,8 @@ describe("tabSelection", () => {
           active: true,
           audible: false,
           discarded: false,
-          favIconUrl: null
+          favIconUrl: null,
+          lastAccessed: 0
         }
       },
       {
@@ -53,7 +54,8 @@ describe("tabSelection", () => {
           active: false,
           audible: false,
           discarded: false,
-          favIconUrl: null
+          favIconUrl: null,
+          lastAccessed: 0
         }
       }
     ];

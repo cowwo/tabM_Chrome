@@ -84,6 +84,7 @@ export function createPortMessageHandlers(deps: Pick<
   "debug/set-trace-settings": PortMessageHandler<Extract<PanelToBackgroundMessage, { type: "debug/set-trace-settings" }>>;
   "debug/clear-trace": PortMessageHandler<Extract<PanelToBackgroundMessage, { type: "debug/clear-trace" }>>;
   "command/dispatch": PortMessageHandler<Extract<PanelToBackgroundMessage, { type: "command/dispatch" }>>;
+  "panel/heartbeat": PortMessageHandler<Extract<PanelToBackgroundMessage, { type: "panel/heartbeat" }>>;
 } {
   return {
     "debug/get-trace": async (port) => {
@@ -133,6 +134,9 @@ export function createPortMessageHandlers(deps: Pick<
           return commandResult;
         }
       });
+    },
+    "panel/heartbeat": async () => {
+      // 心跳仅用于保持 service worker 存活，后台静默忽略
     }
   };
 }

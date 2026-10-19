@@ -15,7 +15,8 @@ function makeTab(overrides: Partial<TabRecord>): TabRecord {
     active: overrides.active ?? false,
     audible: overrides.audible ?? false,
     discarded: overrides.discarded ?? false,
-    favIconUrl: overrides.favIconUrl ?? null
+    favIconUrl: overrides.favIconUrl ?? null,
+    lastAccessed: overrides.lastAccessed ?? 0
   };
 }
 

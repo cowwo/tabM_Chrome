@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NO_TAB_GROUP_ID } from "../src/shared/defaults";
 import { createSnapshot, createStateFromTabs } from "../src/shared/domain/tabState";
-import type { TabRecord } from "../src/shared/types";
+import type { StorePatch, TabRecord, TabStoreSnapshot } from "../src/shared/types";
 import { createInitialPanelControllerState, reducePanelControllerState } from "../src/sidepanel/panelControllerState";
 
 function makeTab(overrides: Partial<TabRecord>): TabRecord {
@@ -16,12 +16,48 @@ function makeTab(overrides: Partial<TabRecord>): TabRecord {
     active: overrides.active ?? false,
     audible: overrides.audible ?? false,
     discarded: overrides.discarded ?? false,
-    favIconUrl: overrides.favIconUrl ?? null
+    favIconUrl: overrides.favIconUrl ?? null,
+    lastAccessed: overrides.lastAccessed ?? 0
   };
 }
 
 function makeSnapshot(tabs: TabRecord[], version = 1) {
   return createSnapshot(createStateFromTabs(tabs, tabs[0]?.windowId ?? null), version);
+}
+
+function makeBootSnapshot(tabs: TabRecord[], version: number, bootId: string) {
+  return {
+    ...makeSnapshot(tabs, version),
+    bootId
+  };
+}
+
+function applySnapshot(
+  state: ReturnType<typeof createInitialPanelControllerState>,
+  snapshot: TabStoreSnapshot
+) {
+  return reducePanelControllerState(state, {
+    type: "background/message",
+    message: {
+      type: "panel/snapshot",
+      payload: {
+        snapshot
+      }
+    }
+  });
+}
+
+function applyPatchMessage(
+  state: ReturnType<typeof createInitialPanelControllerState>,
+  payload: StorePatch
+) {
+  return reducePanelControllerState(state, {
+    type: "background/message",
+    message: {
+      type: "panel/patch",
+      payload
+    }
+  });
 }
 
 describe("panelControllerState", () => {
@@ -245,5 +281,137 @@ describe("panelControllerState", () => {
     });
 
     expect(next.connectionEpoch).toBe(initial.connectionEpoch + 1);
+  });
+
+  it("rejects a lower-version snapshot from the same background boot", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, active: true })], 5, "boot-a")
+    );
+
+    const rejected = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 99, title: "Stale" })], 3, "boot-a")
+    );
+
+    expect(rejected).toBe(state);
+    expect(rejected.snapshot.version).toBe(5);
+    expect(rejected.snapshot.tabsById[99]).toBeUndefined();
+  });
+
+  it("accepts a whole snapshot when the background boot id changes even with a lower version", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, title: "Old boot tab", active: true })], 9, "boot-a")
+    );
+
+    const rebuilt = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 2, title: "New boot tab", active: true })], 2, "boot-b")
+    );
+
+    expect(rebuilt.snapshot.version).toBe(2);
+    expect(rebuilt.snapshot.bootId).toBe("boot-b");
+    expect(rebuilt.snapshot.tabsById[2]?.title).toBe("New boot tab");
+    expect(rebuilt.snapshot.tabsById[1]).toBeUndefined();
+    expect(rebuilt.hasReceivedRemoteState).toBe(true);
+    expect(rebuilt.isInteractive).toBe(true);
+    expect(rebuilt.bootstrapProgress).toBeNull();
+  });
+
+  it("lets a remote boot-scoped snapshot replace a bootless local bootstrap snapshot", () => {
+    let state = createInitialPanelControllerState();
+    state = reducePanelControllerState(state, {
+      type: "bootstrap/snapshot",
+      snapshot: makeSnapshot([makeTab({ id: 1, title: "Local bootstrap tab", active: true })], 1)
+    });
+
+    // 后台版本号可能仍是 0（store 从未变更），旧逻辑会因 0 < 1 拒收。
+    const rebuilt = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 2, title: "Remote tab", active: true })], 0, "boot-a")
+    );
+
+    expect(rebuilt.snapshot.version).toBe(0);
+    expect(rebuilt.snapshot.tabsById[2]?.title).toBe("Remote tab");
+    expect(rebuilt.snapshot.tabsById[1]).toBeUndefined();
+  });
+
+  it("keeps the legacy version comparison when snapshots carry no boot id", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(state, makeSnapshot([makeTab({ id: 1, active: true })], 5));
+
+    const rejected = applySnapshot(state, makeSnapshot([makeTab({ id: 3 })], 3));
+    expect(rejected.snapshot.version).toBe(5);
+    expect(rejected.snapshot.tabsById[3]).toBeUndefined();
+
+    const accepted = applySnapshot(state, makeSnapshot([makeTab({ id: 4 })], 6));
+    expect(accepted.snapshot.version).toBe(6);
+    expect(accepted.snapshot.tabsById[4]).toBeDefined();
+  });
+
+  it("ignores patches from a different background boot and applies matching or legacy ones", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, active: true })], 3, "boot-a")
+    );
+
+    const mismatched = applyPatchMessage(state, {
+      type: "tab/upsert",
+      tab: makeTab({ id: 10, title: "Foreign boot tab" }),
+      bootId: "boot-b"
+    });
+    expect(mismatched).toBe(state);
+    expect(mismatched.snapshot.version).toBe(3);
+    expect(mismatched.snapshot.tabsById[10]).toBeUndefined();
+
+    const matched = applyPatchMessage(state, {
+      type: "tab/upsert",
+      tab: makeTab({ id: 11, title: "Same boot tab" }),
+      bootId: "boot-a"
+    });
+    expect(matched.snapshot.version).toBe(4);
+    expect(matched.snapshot.tabsById[11]?.title).toBe("Same boot tab");
+    expect(matched.snapshot.bootId).toBe("boot-a");
+
+    const legacy = applyPatchMessage(matched, {
+      type: "tab/upsert",
+      tab: makeTab({ id: 12, title: "Legacy patch tab" })
+    });
+    expect(legacy.snapshot.version).toBe(5);
+    expect(legacy.snapshot.tabsById[12]?.title).toBe("Legacy patch tab");
+    expect(legacy.snapshot.bootId).toBe("boot-a");
+  });
+
+  it("clears errors and marks the panel interactive when accepting a boot-changed snapshot", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, active: true })], 4, "boot-a")
+    );
+    state = reducePanelControllerState(state, {
+      type: "background/message",
+      message: {
+        type: "panel/error",
+        payload: {
+          message: "同步失败"
+        }
+      }
+    });
+    expect(state.errorMessage).toBe("同步失败");
+
+    const recovered = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 2, active: true })], 1, "boot-b")
+    );
+
+    expect(recovered.errorMessage).toBeNull();
+    expect(recovered.isInteractive).toBe(true);
+    expect(recovered.bootstrapProgress).toBeNull();
+    expect(recovered.hasReceivedRemoteState).toBe(true);
+    expect(recovered.snapshot.version).toBe(1);
   });
 });

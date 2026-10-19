@@ -19,6 +19,7 @@ export type BackgroundEventHandlerDependencies = Pick<
   enqueueStoreTask: <T>(task: () => Promise<T>) => Promise<T>;
   syncGroupFromChrome: (groupId: number, providedGroup?: chrome.tabGroups.TabGroup) => Promise<void>;
   syncWindowFromChrome: (windowId: number, traceContext?: Record<string, unknown>) => Promise<void>;
+  getChromeTab: (tabId: number) => Promise<chrome.tabs.Tab>;
   handlePatch: (patch: ReturnType<BackgroundRuntimeDependencies["store"]["removeWindow"]>) => void;
   handleActivated: (activeInfo: chrome.tabs.TabActiveInfo) => Promise<void>;
 };
@@ -34,6 +35,7 @@ export function createTabEventHandlers(deps: Pick<
   | "store"
   | "handlePatch"
   | "syncGroupFromChrome"
+  | "getChromeTab"
 >): {
   onCreated: (tab: chrome.tabs.Tab) => void;
   onUpdated: (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void;
@@ -42,6 +44,7 @@ export function createTabEventHandlers(deps: Pick<
   onDetached: (tabId: number, detachInfo: chrome.tabs.TabDetachInfo) => void;
   onRemoved: (tabId: number, removeInfo: chrome.tabs.TabRemoveInfo) => void;
   onActivated: (activeInfo: chrome.tabs.TabActiveInfo) => void;
+  onReplaced: (addedTabId: number, removedTabId: number) => void;
 } {
   const scheduleAutoWindowSync = (params: {
     windowId: number;
@@ -266,6 +269,56 @@ export function createTabEventHandlers(deps: Pick<
     },
     onActivated: (activeInfo) => {
       deps.enqueueStoreTask(() => deps.handleActivated(activeInfo));
+    },
+    onReplaced: (addedTabId, removedTabId) => {
+      deps.traceBackgroundEvent("tabs/onReplaced", {
+        addedTabId,
+        removedTabId
+      });
+      void deps.enqueueStoreTask(async () => {
+        await deps.ensureInitialized();
+        const removedTab = deps.store.getTab(removedTabId);
+        if (removedTab) {
+          deps.handlePatch(deps.store.removeTab(removedTabId, removedTab.windowId));
+        }
+
+        let chromeTab: chrome.tabs.Tab;
+        try {
+          chromeTab = await deps.getChromeTab(addedTabId);
+        } catch {
+          if (removedTab) {
+            scheduleAutoWindowSync({
+              windowId: removedTab.windowId,
+              cause: "tabs/onReplaced",
+              reason: "tab-get-failed",
+              tabId: addedTabId
+            });
+          }
+          return;
+        }
+
+        const normalizedTab = normalizeChromeTab(chromeTab);
+        if (!normalizedTab) {
+          if (removedTab) {
+            scheduleAutoWindowSync({
+              windowId: removedTab.windowId,
+              cause: "tabs/onReplaced",
+              reason: "normalize-failed",
+              tabId: addedTabId
+            });
+          }
+          return;
+        }
+
+        deps.handlePatch(deps.store.upsertTab(normalizedTab));
+        deps.traceBackgroundEvent("patch/tab-replaced", {
+          addedTabId: normalizedTab.id,
+          removedTabId,
+          windowId: normalizedTab.windowId,
+          groupId: normalizedTab.groupId
+        });
+        await ensureKnownGroup(normalizedTab, "tabs/onReplaced");
+      });
     }
   };
 }

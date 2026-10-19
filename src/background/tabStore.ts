@@ -3,6 +3,7 @@ import type { StorePatch, TabGroupRecord, TabRecord, TabStoreSnapshot, TabStoreS
 
 export interface BackgroundTabStore {
   initialize(tabs: TabRecord[], focusedWindowId: number | null, groups?: TabGroupRecord[]): void;
+  getBootId(): string;
   getSnapshot(): TabStoreSnapshot;
   hasTab(tabId: number): boolean;
   getTab(tabId: number): TabRecord | undefined;
@@ -18,7 +19,21 @@ export interface BackgroundTabStore {
   purgeStaleWindows(liveWindowIds: ReadonlySet<number>): StorePatch[];
 }
 
+// service worker 每次启动都会重新执行本模块，bootId 用于让面板区分"后台换了一次启动"。
+function createBootId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // 老环境没有 randomUUID 时走降级路径
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function createBackgroundTabStore(): BackgroundTabStore {
+  const bootId = createBootId();
   let state: TabStoreState = createEmptyState();
   let version = 0;
 
@@ -39,8 +54,15 @@ export function createBackgroundTabStore(): BackgroundTabStore {
       version += 1;
     },
 
+    getBootId() {
+      return bootId;
+    },
+
     getSnapshot() {
-      return createSnapshot(state, version);
+      return {
+        ...createSnapshot(state, version),
+        bootId
+      };
     },
 
     hasTab(tabId) {

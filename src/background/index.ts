@@ -28,10 +28,12 @@ import {
 const store = createBackgroundTabStore();
 const panelPortHub = createPanelPortHub();
 const detachedTabWindowIds = new Map<number, number>();
+const windowSyncFailureCounts = new Map<number, number>();
+const SYNC_RETRY_DELAYS_MS = [300, 900];
 const chromeQueryHelpers = createChromeQueryHelpers();
 const BADGE_BACKGROUND_COLOR = "#111827";
 const KEEPALIVE_ALARM_NAME = "sw-keepalive";
-const KEEPALIVE_INTERVAL_MINUTES = 0.33; // ~20 seconds
+const KEEPALIVE_INTERVAL_MINUTES = 0.5; // Chrome alarms 最短周期为 30 秒，低于该值不会生效
 
 let extensionSettings: ExtensionSettingsRecord = {
   ...DEFAULT_EXTENSION_SETTINGS,
@@ -159,9 +161,12 @@ function registerPanelPortListener(): void {
         await windowSyncCoordinator.runAfterCurrentCycle({
           cause: "panel/connect",
           task: async () => {
+            // 兜底自愈：面板每次连接都先与 Chrome 全量对账一遍，快照必须在对账完成后发送。
+            await reconcileAllWindowsForPanelConnect();
             const snapshot = store.getSnapshot();
             traceBackgroundEvent("panel/send-snapshot", {
               version: snapshot.version,
+              bootId: snapshot.bootId ?? null,
               focusedWindowId: snapshot.focusedWindowId,
               totalTabs: Object.keys(snapshot.tabsById).length,
               windowCount: snapshot.windowOrder.length
@@ -203,7 +208,8 @@ function registerTabListeners(): void {
     ensureInitialized,
     store,
     handlePatch,
-    syncGroupFromChrome
+    syncGroupFromChrome,
+    getChromeTab: (tabId) => chrome.tabs.get(tabId)
   });
 
   chrome.tabs.onCreated.addListener(handlers.onCreated);
@@ -213,6 +219,7 @@ function registerTabListeners(): void {
   chrome.tabs.onDetached.addListener(handlers.onDetached);
   chrome.tabs.onRemoved.addListener(handlers.onRemoved);
   chrome.tabs.onActivated.addListener(handlers.onActivated);
+  chrome.tabs.onReplaced.addListener(handlers.onReplaced);
 }
 
 function registerTabGroupListeners(): void {
@@ -257,6 +264,11 @@ async function handlePortMessage(
   port: chrome.runtime.Port,
   message: PanelToBackgroundMessage
 ): Promise<void> {
+  if (message.type === "panel/heartbeat") {
+    // 心跳仅用于保活，静默忽略，不回错误
+    return;
+  }
+
   try {
     await resolvePortMessageHandler(message.type)(port, message as never);
   } catch (error) {
@@ -300,13 +312,10 @@ async function handleActivated(activeInfo: chrome.tabs.TabActiveInfo): Promise<v
   }
 
   for (const patch of store.setActiveTab(activeInfo.windowId, activeInfo.tabId)) {
-    panelPortHub.broadcastPatch(patch);
+    broadcastStorePatchToPanel(patch);
   }
 
-  const focusPatch = store.focusWindow(activeInfo.windowId);
-  if (focusPatch) {
-    panelPortHub.broadcastPatch(focusPatch);
-  }
+  broadcastStorePatchToPanel(store.focusWindow(activeInfo.windowId));
 }
 
 async function syncWindowFromChrome(
@@ -349,13 +358,47 @@ async function syncWindowFromChrome(
       nextTabIdsPreview: normalizedTabs.slice(0, 8).map((tab) => tab.id),
       ...traceContext
     });
+    windowSyncFailureCounts.delete(windowId);
   } catch (error) {
+    const failureCount = (windowSyncFailureCounts.get(windowId) ?? 0) + 1;
+    windowSyncFailureCounts.set(windowId, failureCount);
+    const retryDelayMs = SYNC_RETRY_DELAYS_MS[failureCount - 1];
     traceBackgroundEvent("syncWindow/error", {
       windowId,
+      retryAttempt: retryDelayMs == null ? null : failureCount,
+      retryDelayMs: retryDelayMs ?? null,
       ...traceContext,
       ...summarizeError(error)
     });
+
+    if (retryDelayMs != null) {
+      // 当前任务已经跑在 storeTaskQueue 里，不能再 enqueue 等待自身，只能延迟交给协调器排队
+      globalThis.setTimeout(() => {
+        void windowSyncCoordinator.scheduleWindowSync({
+          windowId,
+          cause: "retry/sync-window"
+        });
+      }, retryDelayMs);
+    }
+
     return;
+  }
+}
+
+async function reconcileAllWindowsForPanelConnect(): Promise<void> {
+  const windowIds = await chromeQueryHelpers.queryAllWindowIds();
+  traceBackgroundEvent("panel/connect-reconcile", {
+    windowIds,
+    windowCount: windowIds.length
+  }, {
+    category: "panel"
+  });
+
+  // 逐个窗口串行对账，避免并发查询把旧快照写回 store
+  for (const windowId of windowIds) {
+    await syncWindowFromChrome(windowId, {
+      cause: "panel/connect-reconcile"
+    });
   }
 }
 
@@ -378,12 +421,23 @@ async function syncGroupFromChrome(
   });
 }
 
+function broadcastStorePatchToPanel(patch: StorePatch | null): void {
+  if (!patch) {
+    return;
+  }
+
+  panelPortHub.broadcastPatch({
+    ...patch,
+    bootId: store.getBootId()
+  });
+}
+
 function handlePatch(patch: StorePatch | null): void {
   if (!patch) {
     return;
   }
 
-  panelPortHub.broadcastPatch(patch);
+  broadcastStorePatchToPanel(patch);
   scheduleActionBadgeUpdate();
 }
 

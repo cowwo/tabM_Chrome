@@ -6,6 +6,8 @@ import {
 } from "../src/background/backgroundEventHandlers";
 
 function createTabEventDeps() {
+  const pendingTasks: Array<Promise<unknown>> = [];
+
   return {
     traceBackgroundEvent: vi.fn(),
     windowSyncCoordinator: {
@@ -13,10 +15,18 @@ function createTabEventDeps() {
       scheduleCrossWindowSync: vi.fn(async () => undefined)
     },
     detachedTabWindowIds: new Map<number, number>(),
-    enqueueStoreTask: vi.fn(async (task: () => Promise<void>) => await task()),
+    pendingTasks,
+    enqueueStoreTask: vi.fn((task: () => Promise<unknown>) => {
+      const taskPromise = task();
+      pendingTasks.push(taskPromise);
+      return taskPromise;
+    }),
     handleActivated: vi.fn(async () => undefined),
     ensureInitialized: vi.fn(async () => undefined),
     handlePatch: vi.fn(),
+    getChromeTab: vi.fn(async (): Promise<chrome.tabs.Tab> => {
+      throw new Error("chrome.tabs.get should not be called by default");
+    }),
     syncGroupFromChrome: vi.fn(async () => undefined),
     store: {
       hasTab: vi.fn(() => true),
@@ -193,6 +203,95 @@ describe("backgroundEventHandlers", () => {
     expect(deps.windowSyncCoordinator.scheduleWindowSync).toHaveBeenCalledWith({
       windowId: 9,
       cause: "autocorrect/tabs/onRemoved"
+    });
+  });
+
+  it("should remove the old tab and upsert the replacement on tabs/onReplaced", async () => {
+    const deps = createTabEventDeps();
+    deps.store.getTab = vi.fn(() => ({
+      id: 40,
+      windowId: 9,
+      index: 2,
+      groupId: -1,
+      title: "Old",
+      url: "https://old.example.com",
+      pinned: false,
+      active: false,
+      audible: false,
+      discarded: false,
+      favIconUrl: null,
+      lastAccessed: 0
+    }));
+    deps.getChromeTab = vi.fn(async (): Promise<chrome.tabs.Tab> => ({
+      id: 41,
+      windowId: 9,
+      index: 2,
+      groupId: -1,
+      title: "New",
+      url: "https://new.example.com",
+      pinned: false,
+      active: true,
+      audible: false,
+      discarded: false,
+      favIconUrl: null,
+      lastAccessed: 0
+    } as unknown as chrome.tabs.Tab));
+
+    const handlers = createTabEventHandlers(deps as never);
+    handlers.onReplaced(41, 40);
+    await Promise.all(deps.pendingTasks);
+
+    expect(deps.getChromeTab).toHaveBeenCalledWith(41);
+    expect(deps.store.removeTab).toHaveBeenCalledWith(40, 9);
+    expect(deps.handlePatch).toHaveBeenNthCalledWith(1, {
+      type: "tab/remove",
+      tabId: 40,
+      windowId: 9
+    });
+    expect(deps.store.upsertTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 41, windowId: 9, title: "New", index: 2 })
+    );
+    expect(deps.handlePatch).toHaveBeenNthCalledWith(2, {
+      type: "tab/upsert",
+      tab: expect.objectContaining({ id: 41, windowId: 9, index: 2 })
+    });
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).not.toHaveBeenCalled();
+  });
+
+  it("should fall back to window reconciliation when the replaced tab cannot be read", async () => {
+    const deps = createTabEventDeps();
+    deps.store.getTab = vi.fn(() => ({
+      id: 40,
+      windowId: 9,
+      index: 2,
+      groupId: -1,
+      title: "Old",
+      url: "https://old.example.com",
+      pinned: false,
+      active: false,
+      audible: false,
+      discarded: false,
+      favIconUrl: null,
+      lastAccessed: 0
+    }));
+    deps.getChromeTab = vi.fn(async (): Promise<chrome.tabs.Tab> => {
+      throw new Error("No tab with id: 41");
+    });
+
+    const handlers = createTabEventHandlers(deps as never);
+    handlers.onReplaced(41, 40);
+    await Promise.all(deps.pendingTasks);
+
+    expect(deps.store.removeTab).toHaveBeenCalledWith(40, 9);
+    expect(deps.handlePatch).toHaveBeenCalledWith({
+      type: "tab/remove",
+      tabId: 40,
+      windowId: 9
+    });
+    expect(deps.store.upsertTab).not.toHaveBeenCalled();
+    expect(deps.windowSyncCoordinator.scheduleWindowSync).toHaveBeenCalledWith({
+      windowId: 9,
+      cause: "autocorrect/tabs/onReplaced"
     });
   });
 

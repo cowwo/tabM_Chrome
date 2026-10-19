@@ -113,7 +113,8 @@ describe("trace", () => {
               active: index === 0,
               audible: false,
               discarded: false,
-              favIconUrl: null
+              favIconUrl: null,
+              lastAccessed: 0
             }
           ])
         ),

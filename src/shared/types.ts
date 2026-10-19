@@ -66,6 +66,7 @@ export interface TabStoreState {
 
 export interface TabStoreSnapshot extends TabStoreState {
   version: number;
+  bootId?: string;
 }
 
 export type TraceEntryLevel = "debug" | "info" | "warn" | "error";
@@ -109,7 +110,7 @@ export interface PanelTraceEventPayload {
   category?: string;
 }
 
-export type StorePatch =
+export type StorePatch = (
   | {
       type: "tab/upsert";
       tab: TabRecord;
@@ -134,7 +135,10 @@ export type StorePatch =
   | {
       type: "window/remove";
       windowId: number;
-    };
+    }
+) & {
+  bootId?: string;
+};
 
 export type TabCommand = {
   type: "tab/activate";

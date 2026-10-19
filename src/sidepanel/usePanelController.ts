@@ -9,6 +9,11 @@ import { createPanelBootstrapAdapter } from "./panelBootstrapAdapter";
 import { createPanelPortAdapter, type PanelPortAdapter, type TraceBundlePayload } from "./panelPortAdapter";
 import { createInitialPanelControllerState, reducePanelControllerState } from "./panelControllerState";
 
+// 20 秒一次空心跳，让后台 Service Worker 不会因空闲被回收。
+const PANEL_HEARTBEAT_INTERVAL_MS = 20_000;
+// 面板错误自愈的最小间隔，避免后台持续报错时形成 resync 风暴。
+const AUTO_RESYNC_MIN_INTERVAL_MS = 1_500;
+
 export function usePanelController(locale: SupportedLocale) {
   const [state, dispatchState] = useReducer(
     reducePanelControllerState,
@@ -17,10 +22,22 @@ export function usePanelController(locale: SupportedLocale) {
   );
   const portAdapterRef = useRef<PanelPortAdapter | null>(null);
   const receivedRemoteStateRef = useRef(false);
+  const resyncPanelRef = useRef<() => void>(() => {});
+  const lastAutoResyncAtRef = useRef(0);
 
   useEffect(() => {
     let disposed = false;
     const bootstrapAdapter = createPanelBootstrapAdapter(locale);
+
+    const requestAutoResync = (): void => {
+      const now = Date.now();
+      if (now - lastAutoResyncAtRef.current < AUTO_RESYNC_MIN_INTERVAL_MS) {
+        return;
+      }
+
+      lastAutoResyncAtRef.current = now;
+      resyncPanelRef.current();
+    };
 
     const portAdapter = createPanelPortAdapter({
       onMessage: (message) => {
@@ -32,6 +49,11 @@ export function usePanelController(locale: SupportedLocale) {
           type: "background/message",
           message
         });
+
+        if (message.type === "panel/error") {
+          // 后台报错时自愈一次：重建连接并重新拉取整包快照。
+          requestAutoResync();
+        }
       },
       onConnectionFailed: () => {
         dispatchState({
@@ -80,8 +102,13 @@ export function usePanelController(locale: SupportedLocale) {
     });
     portAdapter.connect();
 
+    const heartbeatTimer = window.setInterval(() => {
+      portAdapter.postMessage({ type: "panel/heartbeat" });
+    }, PANEL_HEARTBEAT_INTERVAL_MS);
+
     return () => {
       disposed = true;
+      window.clearInterval(heartbeatTimer);
       portAdapter.disconnect();
       if (portAdapterRef.current === portAdapter) {
         portAdapterRef.current = null;
@@ -150,6 +177,11 @@ export function usePanelController(locale: SupportedLocale) {
       type: "resync/requested"
     });
   }
+
+  useEffect(() => {
+    // 始终指向最新一次渲染的 resyncPanel，供连接事件回调安全调用。
+    resyncPanelRef.current = resyncPanel;
+  });
 
   async function requestTraceBundle() {
     const portAdapter = portAdapterRef.current;

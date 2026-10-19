@@ -62,4 +62,7 @@ export type PanelToBackgroundMessage =
     }
   | {
       type: "debug/clear-trace";
+    }
+  | {
+      type: "panel/heartbeat";
     };

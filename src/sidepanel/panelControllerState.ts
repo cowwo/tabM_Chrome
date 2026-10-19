@@ -157,27 +157,45 @@ function reduceBackgroundMessage(
   message: BackgroundToPanelMessage
 ): PanelControllerState {
   switch (message.type) {
-    case "panel/snapshot":
-      if (message.payload.snapshot.version < state.snapshot.version) {
+    case "panel/snapshot": {
+      const nextSnapshot = message.payload.snapshot;
+      const bootChanged =
+        nextSnapshot.bootId !== undefined && nextSnapshot.bootId !== state.snapshot.bootId;
+
+      // 后台换了启动周期（Service Worker 重启）时，version 不再是全局递增，
+      // 必须无条件整包重建，否则旧的高 version 会永久拒收新快照。
+      if (!bootChanged && nextSnapshot.version < state.snapshot.version) {
         return state;
       }
 
       return {
         ...state,
-        snapshot: message.payload.snapshot,
+        snapshot: nextSnapshot,
         errorMessage: null,
         bootstrapProgress: null,
         isInteractive: true,
         hasReceivedRemoteState: true
       };
-    case "panel/patch":
+    }
+    case "panel/patch": {
+      const patch = message.payload;
+      // 跨启动周期的增量不可信：目标快照尚未重建，应用会得到混合状态。
+      if (
+        patch.bootId !== undefined &&
+        state.snapshot.bootId !== undefined &&
+        patch.bootId !== state.snapshot.bootId
+      ) {
+        return state;
+      }
+
       return {
         ...state,
-        snapshot: applyStorePatch(state.snapshot, message.payload),
+        snapshot: applyStorePatch(state.snapshot, patch),
         errorMessage: null,
         isInteractive: true,
         hasReceivedRemoteState: true
       };
+    }
     case "panel/error":
       return {
         ...state,
@@ -222,8 +240,13 @@ function applyStorePatch(snapshot: TabStoreSnapshot, patch: StorePatch): TabStor
     return snapshot;
   }
 
+  // applyPatch 只返回 TabStoreState，会丢掉 bootId；这里必须显式带回，
+  // 否则首个 patch 之后就无法再识别后台是否换过启动周期。
+  const bootId = patch.bootId ?? snapshot.bootId;
+
   return {
     ...nextState,
-    version: snapshot.version + 1
+    version: snapshot.version + 1,
+    ...(bootId !== undefined ? { bootId } : {})
   };
 }
