@@ -60,6 +60,16 @@ function applyPatchMessage(
   });
 }
 
+function applyPatchesBatch(
+  state: ReturnType<typeof createInitialPanelControllerState>,
+  patches: StorePatch[]
+) {
+  return reducePanelControllerState(state, {
+    type: "panel/patches-batch",
+    patches
+  });
+}
+
 describe("panelControllerState", () => {
   it("uses bootstrap snapshots before any remote state arrives", () => {
     const localSnapshot = makeSnapshot([makeTab({ id: 1, active: true })]);
@@ -384,6 +394,55 @@ describe("panelControllerState", () => {
     expect(legacy.snapshot.version).toBe(5);
     expect(legacy.snapshot.tabsById[12]?.title).toBe("Legacy patch tab");
     expect(legacy.snapshot.bootId).toBe("boot-a");
+  });
+
+  it("applies a batched patch list sequentially and ends interactive with the last state", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, active: true })], 3, "boot-a")
+    );
+
+    const batched = applyPatchesBatch(state, [
+      { type: "tab/upsert", tab: makeTab({ id: 2, title: "Second tab", active: true }), bootId: "boot-a" },
+      { type: "window/focus", windowId: 2, bootId: "boot-a" },
+      { type: "tab/remove", tabId: 1, windowId: 1, bootId: "boot-a" }
+    ]);
+
+    expect(batched.snapshot.tabsById[1]).toBeUndefined();
+    expect(batched.snapshot.tabsById[2]?.title).toBe("Second tab");
+    expect(batched.snapshot.focusedWindowId).toBe(2);
+    expect(batched.snapshot.version).toBe(6);
+    expect(batched.isInteractive).toBe(true);
+    expect(batched.hasReceivedRemoteState).toBe(true);
+    expect(batched.errorMessage).toBeNull();
+  });
+
+  it("treats a batch from another background boot as a no-op", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, active: true })], 3, "boot-a")
+    );
+
+    const batched = applyPatchesBatch(state, [
+      { type: "tab/upsert", tab: makeTab({ id: 10, title: "Foreign" }), bootId: "boot-b" },
+      { type: "window/focus", windowId: 2, bootId: "boot-b" }
+    ]);
+
+    expect(batched).toBe(state);
+    expect(batched.snapshot.version).toBe(3);
+    expect(batched.snapshot.tabsById[10]).toBeUndefined();
+  });
+
+  it("treats an empty patch batch as a no-op", () => {
+    let state = createInitialPanelControllerState();
+    state = applySnapshot(
+      state,
+      makeBootSnapshot([makeTab({ id: 1, active: true })], 2, "boot-a")
+    );
+
+    expect(applyPatchesBatch(state, [])).toBe(state);
   });
 
   it("clears errors and marks the panel interactive when accepting a boot-changed snapshot", () => {

@@ -1,4 +1,4 @@
-import { applyPatch, createStateFromTabs, purgeStaleWindows, removeTabRecord, upsertTabRecord } from "../src/shared/domain/tabState";
+import { applyPatch, createStateFromTabs, purgeStaleWindows, removeTabRecord, setFocusedWindow, upsertTabRecord } from "../src/shared/domain/tabState";
 import { NO_TAB_GROUP_ID } from "../src/shared/defaults";
 import type { TabRecord } from "../src/shared/types";
 
@@ -144,6 +144,41 @@ describe("tab state", () => {
 
     expect(focused.windowOrder).toEqual([1, 2]);
     expect(focused.focusedWindowId).toBe(2);
+  });
+
+  it("returns the same state reference when the focused window is unchanged", () => {
+    const initial = createStateFromTabs(
+      [
+        makeTab({ id: 1, windowId: 1, index: 0 }),
+        makeTab({ id: 2, windowId: 2, index: 0 })
+      ],
+      1
+    );
+
+    expect(setFocusedWindow(initial, 1)).toBe(initial);
+    expect(applyPatch(initial, { type: "window/focus", windowId: 1 })).toBe(initial);
+  });
+
+  it("keeps a null focused window idempotent", () => {
+    const initial = createStateFromTabs([], null);
+
+    expect(setFocusedWindow(initial, null)).toBe(initial);
+  });
+
+  it("returns a new state when the focused window actually changes", () => {
+    const initial = createStateFromTabs(
+      [
+        makeTab({ id: 1, windowId: 1, index: 0 }),
+        makeTab({ id: 2, windowId: 2, index: 0 })
+      ],
+      1
+    );
+
+    const next = setFocusedWindow(initial, 2);
+
+    expect(next).not.toBe(initial);
+    expect(next.focusedWindowId).toBe(2);
+    expect(initial.focusedWindowId).toBe(1);
   });
 
   it("keeps remaining windows sorted after removing a window", () => {

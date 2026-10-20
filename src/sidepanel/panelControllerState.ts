@@ -55,6 +55,10 @@ export type PanelControllerEvent =
       message: BackgroundToPanelMessage;
     }
   | {
+      type: "panel/patches-batch";
+      patches: StorePatch[];
+    }
+  | {
       type: "connection/disconnected";
     }
   | {
@@ -132,6 +136,8 @@ export function reducePanelControllerState(
       };
     case "background/message":
       return reduceBackgroundMessage(state, event.message);
+    case "panel/patches-batch":
+      return reduceBatchedPatches(state, event.patches);
     case "connection/disconnected":
       return {
         ...state,
@@ -177,25 +183,8 @@ function reduceBackgroundMessage(
         hasReceivedRemoteState: true
       };
     }
-    case "panel/patch": {
-      const patch = message.payload;
-      // 跨启动周期的增量不可信：目标快照尚未重建，应用会得到混合状态。
-      if (
-        patch.bootId !== undefined &&
-        state.snapshot.bootId !== undefined &&
-        patch.bootId !== state.snapshot.bootId
-      ) {
-        return state;
-      }
-
-      return {
-        ...state,
-        snapshot: applyStorePatch(state.snapshot, patch),
-        errorMessage: null,
-        isInteractive: true,
-        hasReceivedRemoteState: true
-      };
-    }
+    case "panel/patch":
+      return reducePanelPatch(state, message.payload);
     case "panel/error":
       return {
         ...state,
@@ -220,6 +209,38 @@ function reduceBackgroundMessage(
         }
       };
   }
+}
+
+function reduceBatchedPatches(
+  state: PanelControllerState,
+  patches: StorePatch[]
+): PanelControllerState {
+  // 按到达顺序逐条应用；逐条语义与旧的 background/message → panel/patch 完全一致。
+  let next = state;
+  for (const patch of patches) {
+    next = reducePanelPatch(next, patch);
+  }
+
+  return next;
+}
+
+function reducePanelPatch(state: PanelControllerState, patch: StorePatch): PanelControllerState {
+  // 跨启动周期的增量不可信：目标快照尚未重建，应用会得到混合状态。
+  if (
+    patch.bootId !== undefined &&
+    state.snapshot.bootId !== undefined &&
+    patch.bootId !== state.snapshot.bootId
+  ) {
+    return state;
+  }
+
+  return {
+    ...state,
+    snapshot: applyStorePatch(state.snapshot, patch),
+    errorMessage: null,
+    isInteractive: true,
+    hasReceivedRemoteState: true
+  };
 }
 
 function createBootstrapProgress(

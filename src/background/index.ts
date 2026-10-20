@@ -311,11 +311,21 @@ async function handleActivated(activeInfo: chrome.tabs.TabActiveInfo): Promise<v
     await syncWindowFromChrome(activeInfo.windowId);
   }
 
-  for (const patch of store.setActiveTab(activeInfo.windowId, activeInfo.tabId)) {
+  // 先算完两条路径的变化：setActiveTab 在“已激活”时返回空数组，
+  // focusWindow 在“已聚焦”时（setFocusedWindow 幂等）返回 null。
+  const activationPatches = store.setActiveTab(activeInfo.windowId, activeInfo.tabId);
+  const focusPatch = store.focusWindow(activeInfo.windowId);
+
+  // 已激活且已聚焦：状态没变就不广播，避免面板收到空补丁后白跑一次渲染。
+  if (activationPatches.length === 0 && focusPatch == null) {
+    return;
+  }
+
+  for (const patch of activationPatches) {
     broadcastStorePatchToPanel(patch);
   }
 
-  broadcastStorePatchToPanel(store.focusWindow(activeInfo.windowId));
+  broadcastStorePatchToPanel(focusPatch);
 }
 
 async function syncWindowFromChrome(

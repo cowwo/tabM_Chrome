@@ -7,6 +7,7 @@ import type {
 } from "../shared/types";
 import { createPanelBootstrapAdapter } from "./panelBootstrapAdapter";
 import { createPanelPortAdapter, type PanelPortAdapter, type TraceBundlePayload } from "./panelPortAdapter";
+import { createPanelPatchBatcher, type PanelPatchBatcher } from "./patchBatcher";
 import { createInitialPanelControllerState, reducePanelControllerState } from "./panelControllerState";
 
 // 20 秒一次空心跳，让后台 Service Worker 不会因空闲被回收。
@@ -21,6 +22,7 @@ export function usePanelController(locale: SupportedLocale) {
     createInitialPanelControllerState
   );
   const portAdapterRef = useRef<PanelPortAdapter | null>(null);
+  const patchBatcherRef = useRef<PanelPatchBatcher | null>(null);
   const receivedRemoteStateRef = useRef(false);
   const resyncPanelRef = useRef<() => void>(() => {});
   const lastAutoResyncAtRef = useRef(0);
@@ -39,16 +41,31 @@ export function usePanelController(locale: SupportedLocale) {
       resyncPanelRef.current();
     };
 
+    // 一帧只应用一次 patch：同帧内的 panel/patch 合批后一次性 dispatch，
+    // 快照 / 错误 / 日志类消息则先 flush 队列再立即应用，保证顺序不反转。
+    const patchBatcher = createPanelPatchBatcher({
+      onFlush: (patches) => {
+        dispatchState({
+          type: "panel/patches-batch",
+          patches
+        });
+      },
+      onImmediate: (message) => {
+        dispatchState({
+          type: "background/message",
+          message
+        });
+      }
+    });
+    patchBatcherRef.current = patchBatcher;
+
     const portAdapter = createPanelPortAdapter({
       onMessage: (message) => {
         if (message.type === "panel/snapshot" || message.type === "panel/patch") {
           receivedRemoteStateRef.current = true;
         }
 
-        dispatchState({
-          type: "background/message",
-          message
-        });
+        patchBatcher.accept(message);
 
         if (message.type === "panel/error") {
           // 后台报错时自愈一次：重建连接并重新拉取整包快照。
@@ -56,6 +73,7 @@ export function usePanelController(locale: SupportedLocale) {
         }
       },
       onConnectionFailed: () => {
+        patchBatcher.flushNow();
         dispatchState({
           type: "connection/failed",
           message: translate(locale, "error.panel.connectionFailed")
@@ -66,6 +84,7 @@ export function usePanelController(locale: SupportedLocale) {
           return;
         }
 
+        patchBatcher.flushNow();
         dispatchState({
           type: "connection/disconnected"
         });
@@ -110,6 +129,10 @@ export function usePanelController(locale: SupportedLocale) {
       disposed = true;
       window.clearInterval(heartbeatTimer);
       portAdapter.disconnect();
+      patchBatcher.dispose();
+      if (patchBatcherRef.current === patchBatcher) {
+        patchBatcherRef.current = null;
+      }
       if (portAdapterRef.current === portAdapter) {
         portAdapterRef.current = null;
       }
@@ -163,6 +186,9 @@ export function usePanelController(locale: SupportedLocale) {
     if (state.bootstrapProgress != null) {
       return;
     }
+
+    // 已入队但未应用的 patch 先按序落盘，避免它们排到 resync 之后才被应用。
+    patchBatcherRef.current?.flushNow();
 
     postTraceEvent({
       event: "panel/resync-requested",

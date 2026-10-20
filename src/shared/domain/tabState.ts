@@ -246,6 +246,11 @@ function resolveFocusedWindowAfterRemoval(
 }
 
 export function setFocusedWindow(state: TabStoreState, windowId: number | null): TabStoreState {
+  // 值没变时返回原引用：store 与面板都能据此短路，避免无意义的版本号 +1 和整树重渲染。
+  if (state.focusedWindowId === windowId) {
+    return state;
+  }
+
   return {
     ...state,
     focusedWindowId: windowId
