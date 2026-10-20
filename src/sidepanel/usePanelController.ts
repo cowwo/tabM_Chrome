@@ -61,6 +61,11 @@ export function usePanelController(locale: SupportedLocale) {
 
     const portAdapter = createPanelPortAdapter({
       onMessage: (message) => {
+        if (message.type === "panel/snapshot") {
+          // 端口快照优先：取消本地兜底的等待，迟到的本地结果一律丢弃。
+          bootstrapAdapter.markRemoteSnapshotReceived();
+        }
+
         if (message.type === "panel/snapshot" || message.type === "panel/patch") {
           receivedRemoteStateRef.current = true;
         }
@@ -73,6 +78,8 @@ export function usePanelController(locale: SupportedLocale) {
         }
       },
       onConnectionFailed: () => {
+        // 端口连接失败：立刻走本地兜底，保证首屏不是空白。
+        bootstrapAdapter.markPortFailed();
         patchBatcher.flushNow();
         dispatchState({
           type: "connection/failed",
@@ -84,6 +91,8 @@ export function usePanelController(locale: SupportedLocale) {
           return;
         }
 
+        // 断线且尚未收到快照时先本地兜底；断线重连流程本身不变。
+        bootstrapAdapter.markPortFailed();
         patchBatcher.flushNow();
         dispatchState({
           type: "connection/disconnected"
@@ -128,6 +137,7 @@ export function usePanelController(locale: SupportedLocale) {
     return () => {
       disposed = true;
       window.clearInterval(heartbeatTimer);
+      bootstrapAdapter.dispose();
       portAdapter.disconnect();
       patchBatcher.dispose();
       if (patchBatcherRef.current === patchBatcher) {
