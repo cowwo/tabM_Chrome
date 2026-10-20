@@ -422,8 +422,57 @@ function resolveTabGroup(
   return state.groupsById[tab.groupId] ?? null;
 }
 
+const WINDOW_ROW_CACHE_LIMIT = 256;
+const GROUP_ROW_CACHE_LIMIT = 256;
+
+// 行对象引用缓存：输入（TabRecord 引用 / 窗口或分组关键字段）不变时返回同一个 row 对象，
+// 让 React.memo 能按行跳过重渲染。缓存只由内容决定，不依赖调用顺序。
+const windowRowCache = new Map<string, WindowRow>();
+const groupRowCache = new Map<string, GroupRow>();
+const tabRowCache = new WeakMap<TabRecord, TabRow>();
+
+function buildRowCacheKey(parts: readonly unknown[]): string {
+  return JSON.stringify(parts);
+}
+
+function rememberRow<Row>(
+  cache: Map<string, Row>,
+  cacheKey: string,
+  row: Row,
+  limit: number,
+): Row {
+  if (cache.size >= limit) {
+    // 有界缓存：超限时丢弃最早写入的一半，只影响引用复用，不影响行内容。
+    const dropTarget = Math.ceil(limit / 2);
+    let droppedCount = 0;
+    for (const oldestKey of cache.keys()) {
+      cache.delete(oldestKey);
+      droppedCount += 1;
+      if (droppedCount >= dropTarget) {
+        break;
+      }
+    }
+  }
+
+  cache.set(cacheKey, row);
+  return row;
+}
+
 function createWindowRow(section: WindowSection): WindowRow {
-  return {
+  const cacheKey = buildRowCacheKey([
+    section.windowId,
+    section.title,
+    section.isFocused,
+    section.collapsed,
+    section.totalCount,
+    section.firstUnpinnedTabIndex,
+  ]);
+  const cachedRow = windowRowCache.get(cacheKey);
+  if (cachedRow) {
+    return cachedRow;
+  }
+
+  const row: WindowRow = {
     kind: "window",
     key: `window-${section.windowId}`,
     windowId: section.windowId,
@@ -433,6 +482,7 @@ function createWindowRow(section: WindowSection): WindowRow {
     totalCount: section.totalCount,
     firstUnpinnedTabIndex: section.firstUnpinnedTabIndex,
   };
+  return rememberRow(windowRowCache, cacheKey, row, WINDOW_ROW_CACHE_LIMIT);
 }
 
 function createItemRows(
@@ -441,28 +491,10 @@ function createItemRows(
   includeCollapsedChildren: boolean,
 ): PanelRow[] {
   if (item.kind === "tab") {
-    return [
-      {
-        kind: "tab",
-        key: `tab-${item.tab.id}`,
-        windowId,
-        tab: item.tab,
-      },
-    ];
+    return [createTabRow(windowId, item.tab)];
   }
 
-  const groupRow: GroupRow = {
-    kind: "group",
-    key: `group-${item.group.id}`,
-    windowId,
-    groupId: item.group.id,
-    title: item.group.title,
-    color: item.group.color,
-    collapsed: item.group.collapsed,
-    totalCount: item.tabs.length,
-    tabIds: item.tabs.map((tab) => tab.id),
-    firstTabIndex: item.tabs[0]?.index ?? 0,
-  };
+  const groupRow = createGroupRow(windowId, item);
 
   if (item.group.collapsed && !includeCollapsedChildren) {
     return [groupRow];
@@ -471,13 +503,63 @@ function createItemRows(
   return [groupRow, ...item.tabs.map((tab) => createTabRow(windowId, tab))];
 }
 
+function createGroupRow(
+  windowId: number,
+  item: Extract<WindowSectionItem, { kind: "group" }>,
+): GroupRow {
+  const tabIds = item.tabs.map((tab) => tab.id);
+  const firstTabIndex = item.tabs[0]?.index ?? 0;
+  const cacheKey = buildRowCacheKey([
+    windowId,
+    item.group.id,
+    item.group.title,
+    item.group.color,
+    item.group.collapsed,
+    item.tabs.length,
+    tabIds,
+    firstTabIndex,
+  ]);
+  const cachedRow = groupRowCache.get(cacheKey);
+  if (cachedRow) {
+    return cachedRow;
+  }
+
+  const row: GroupRow = {
+    kind: "group",
+    key: `group-${item.group.id}`,
+    windowId,
+    groupId: item.group.id,
+    title: item.group.title,
+    color: item.group.color,
+    collapsed: item.group.collapsed,
+    totalCount: item.tabs.length,
+    tabIds,
+    firstTabIndex,
+  };
+  return rememberRow(groupRowCache, cacheKey, row, GROUP_ROW_CACHE_LIMIT);
+}
+
 function createTabRow(windowId: number, tab: TabRecord): TabRow {
-  return {
+  const cachedRow = tabRowCache.get(tab);
+  if (cachedRow && cachedRow.windowId === windowId) {
+    return cachedRow;
+  }
+
+  const row: TabRow = {
     kind: "tab",
     key: `tab-${tab.id}`,
     windowId,
     tab,
   };
+
+  if (tab.windowId !== windowId) {
+    // TabRecord 自带 windowId 与所在窗口不一致（异常/瞬态）时不写缓存，
+    // 避免同一 TabRecord 在不同 windowId 之间交替时返回过期行。
+    return row;
+  }
+
+  tabRowCache.set(tab, row);
+  return row;
 }
 
 function normalizeSearchTerm(searchTerm: string): string {
@@ -580,6 +662,29 @@ function collectGroupTabRows(
   };
 }
 
+type SearchAnnotatedRowEntry = {
+  matched: PanelRow;
+  unmatched: PanelRow;
+};
+
+const searchAnnotatedRowCache = new WeakMap<PanelRow, SearchAnnotatedRowEntry>();
+
+// 命中状态派生行缓存：基础行不变、matchesSearch 相同时复用同一个 row 对象。
+// 基础行本身是记忆化的且从不被原地修改，因此 (基础行, matchesSearch) 是纯输入。
+function withSearchMatch(row: PanelRow, matchesSearch: boolean): PanelRow {
+  const cachedEntry = searchAnnotatedRowCache.get(row);
+  if (cachedEntry) {
+    return matchesSearch ? cachedEntry.matched : cachedEntry.unmatched;
+  }
+
+  const entry: SearchAnnotatedRowEntry = {
+    matched: { ...row, matchesSearch: true },
+    unmatched: { ...row, matchesSearch: false },
+  };
+  searchAnnotatedRowCache.set(row, entry);
+  return matchesSearch ? entry.matched : entry.unmatched;
+}
+
 function filterWindowBlocks(
   blocks: readonly WindowRowBlock[],
   term: string,
@@ -626,34 +731,18 @@ function filterWindowBlockEntry(
 ): PanelRow[] {
   if (entry.kind === "tab") {
     return matchesSearchTerm(entry.row.tab, term)
-      ? [
-          {
-            ...entry.row,
-            matchesSearch: true,
-          },
-        ]
+      ? [withSearchMatch(entry.row, true)]
       : [];
   }
 
   const matchingTabs = entry.tabs.flatMap((tabRow) =>
     matchesSearchTerm(tabRow.tab, term)
-      ? [
-          {
-            ...tabRow,
-            matchesSearch: true,
-          },
-        ]
+      ? [withSearchMatch(tabRow, true)]
       : [],
   );
 
   return matchingTabs.length > 0
-    ? [
-        {
-          ...entry.row,
-          matchesSearch: true,
-        },
-        ...matchingTabs,
-      ]
+    ? [withSearchMatch(entry.row, true), ...matchingTabs]
     : [];
 }
 
@@ -693,10 +782,10 @@ function highlightWindowBlock(
     (row) => row.kind === "tab" && row.matchesSearch,
   ).length;
   const hasWindowMatch = matchCount > 0;
-  const highlightedWindowRow: WindowRow = {
-    ...block.windowRow,
-    matchesSearch: hasWindowMatch,
-  };
+  const highlightedWindowRow = withSearchMatch(
+    block.windowRow,
+    hasWindowMatch,
+  );
 
   return {
     rows: [highlightedWindowRow, ...highlightedEntries],
@@ -710,22 +799,22 @@ function highlightWindowBlockEntry(
 ): PanelRow[] {
   if (entry.kind === "tab") {
     return [
-      {
-        ...entry.row,
-        matchesSearch: matchesSearchTerm(entry.row.tab, term),
-      },
+      withSearchMatch(
+        entry.row,
+        matchesSearchTerm(entry.row.tab, term),
+      ),
     ];
   }
 
-  const highlightedTabs: TabRow[] = entry.tabs.map((tabRow) => ({
-    ...tabRow,
-    matchesSearch: matchesSearchTerm(tabRow.tab, term),
-  }));
+  const highlightedTabs: TabRow[] = entry.tabs.map(
+    (tabRow) =>
+      withSearchMatch(
+        tabRow,
+        matchesSearchTerm(tabRow.tab, term),
+      ) as TabRow,
+  );
   const hasGroupMatch = highlightedTabs.some((tabRow) => tabRow.matchesSearch);
-  const highlightedGroupRow: GroupRow = {
-    ...entry.row,
-    matchesSearch: hasGroupMatch,
-  };
+  const highlightedGroupRow = withSearchMatch(entry.row, hasGroupMatch);
 
   return [highlightedGroupRow, ...highlightedTabs];
 }

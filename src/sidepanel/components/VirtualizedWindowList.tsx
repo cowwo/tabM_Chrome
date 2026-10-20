@@ -291,6 +291,42 @@ export function VirtualizedWindowList({
   const handleMoveTabAction = useStableCallback(onMoveTab);
   const handleMoveTabsAction = useStableCallback(onMoveTabs);
   const handleMoveGroupAction = useStableCallback(onMoveGroup);
+  const handleListPointerDown = useStableCallback(
+    (event: React.PointerEvent<HTMLDivElement>): void => {
+      if (event.target instanceof Element && event.target.closest(".stack-list__item")) {
+        return;
+      }
+
+      if (selectionMode) {
+        return;
+      }
+
+      onClearSelection();
+    }
+  );
+  const handleListPointerLeave = useStableCallback((): void => {
+    onHoveredTabChange?.(null);
+  });
+  const handleListClickCapture = useStableCallback(
+    (event: React.MouseEvent<HTMLDivElement>): void => {
+      if (!suppressPostDragClickRef.current) {
+        return;
+      }
+
+      suppressPostDragClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  );
+  const handleListBlur = useStableCallback(
+    (event: React.FocusEvent<HTMLDivElement>): void => {
+      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        return;
+      }
+
+      onHoveredTabChange?.(null);
+    }
+  );
 
   useLayoutEffect(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -845,34 +881,10 @@ export function VirtualizedWindowList({
       role="tree"
       aria-label={translate(locale, "sidepanel.list.aria")}
       style={getStickyScrollStyle(windowStickyOffset)}
-      onPointerDown={(event) => {
-        if (event.target instanceof Element && event.target.closest(".stack-list__item")) {
-          return;
-        }
-
-        if (selectionMode) {
-          return;
-        }
-
-        onClearSelection();
-      }}
-      onPointerLeave={() => onHoveredTabChange?.(null)}
-      onClickCapture={(event) => {
-        if (!suppressPostDragClickRef.current) {
-          return;
-        }
-
-        suppressPostDragClickRef.current = false;
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onBlur={(event) => {
-        if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          return;
-        }
-
-        onHoveredTabChange?.(null);
-      }}
+      onPointerDown={handleListPointerDown}
+      onPointerLeave={handleListPointerLeave}
+      onClickCapture={handleListClickCapture}
+      onBlur={handleListBlur}
     >
       <div className="stack-list">
         {renderSections.map((section, sectionIndex) => (
