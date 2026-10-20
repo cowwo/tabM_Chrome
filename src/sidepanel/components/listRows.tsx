@@ -1,4 +1,3 @@
-import { CloseSmall, Pin } from "@icon-park/react";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { SupportedLocale } from "../../shared/i18n";
 import { buildTabFaviconCandidates } from "../../shared/domain/favicon";
@@ -11,6 +10,7 @@ import {
   getTabRowClassName,
   getWindowRowClassName
 } from "./listUtils";
+import { CloseSmallIcon, PinIcon } from "./rowIcons";
 
 export interface HoveredTabPreview {
   title: string;
@@ -355,6 +355,7 @@ function PanelListRow({
         <button
           type="button"
           className={`tab-row__action${row.tab.pinned ? " tab-row__action--active" : ""}`}
+          data-testid="tab-pin"
           onClick={(event) => {
             event.stopPropagation();
             onTogglePinned(row.tab.id, !row.tab.pinned);
@@ -363,11 +364,12 @@ function PanelListRow({
           aria-pressed={row.tab.pinned}
           disabled={tabDisabled}
         >
-          <Pin theme={row.tab.pinned ? "filled" : "outline"} size="16" />
+          <PinIcon theme={row.tab.pinned ? "filled" : "outline"} size="16" />
         </button>
         <button
           type="button"
           className="tab-row__action"
+          data-testid="tab-close"
           onClick={(event) => {
             event.stopPropagation();
             onCloseTab(row.tab.id);
@@ -375,7 +377,7 @@ function PanelListRow({
           aria-label={translate(locale, "sidepanel.tab.close")}
           disabled={tabDisabled}
         >
-          <CloseSmall theme="outline" size="16" />
+          <CloseSmallIcon theme="outline" size="16" />
         </button>
       </div>
     </div>
