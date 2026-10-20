@@ -29,6 +29,14 @@ export function SidepanelStatus({
   hasUsableSnapshot?: boolean;
   totalTabCount?: number;
 }) {
+  // 重复标签提示属于普通交互反馈，不能只挂在"错误 / 详细日志横幅"分支下面，
+  // 否则正常状态下点击"选择重复标签"且没有重复时用户看不到任何反馈。
+  const duplicateToastElement = duplicateToast ? (
+    <div className="duplicate-toast" aria-live="polite">
+      {duplicateToast}
+    </div>
+  ) : null;
+
   if (isLoading) {
     return (
       <div className="loading-state" aria-live="polite">
@@ -53,15 +61,18 @@ export function SidepanelStatus({
 
   if (hasUsableSnapshot && totalTabCount === 0) {
     return (
-      <div className="empty-state" aria-live="polite">
-        <p className="empty-state__title">{translate(locale, "sidepanel.list.emptyTitle")}</p>
-        <p className="empty-state__body">{translate(locale, "sidepanel.list.emptyBody")}</p>
-      </div>
+      <>
+        <div className="empty-state" aria-live="polite">
+          <p className="empty-state__title">{translate(locale, "sidepanel.list.emptyTitle")}</p>
+          <p className="empty-state__body">{translate(locale, "sidepanel.list.emptyBody")}</p>
+        </div>
+        {duplicateToastElement}
+      </>
     );
   }
 
   if (!errorMessage && !traceEnabled) {
-    return null;
+    return duplicateToastElement;
   }
 
   return (
@@ -103,11 +114,7 @@ export function SidepanelStatus({
           ) : null}
         </div>
       ) : null}
-      {duplicateToast ? (
-        <div className="duplicate-toast" aria-live="polite">
-          {duplicateToast}
-        </div>
-      ) : null}
+      {duplicateToastElement}
     </>
   );
 }

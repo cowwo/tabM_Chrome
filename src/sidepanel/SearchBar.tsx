@@ -194,6 +194,7 @@ export function SearchBar({
 
             <button
               type="button"
+              data-testid="search-filter-mode-toggle"
               className={`search-bar__button${filterMode === "highlight" ? " search-bar__button--active" : ""}`}
               onPointerDown={hideSearchTooltip}
               onClick={handleToggleMode}

@@ -23,6 +23,10 @@ export const test = base.extend<E2eFixture>({
     const isCI = Boolean(process.env.CI);
     const userDataDir = await mkdtemp(resolve(tmpdir(), "sidepanel-e2e-"));
     const context = await chromium.launchPersistentContext(userDataDir, {
+      // 固定测试环境的浏览器 UI 语言。扩展默认 locale.mode === "system"，会跟随
+      // chrome.i18n.getUILanguage()；不指定时测试环境拿到 en-US，按中文文案断言的用例会失败。
+      // 需要英文断言/英文控件名的用例，请用 tests/e2e/helpers/locale.ts 的 setLocale 显式切换。
+      locale: "zh-CN",
       executablePath:
         process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
         "/home/ff/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome",

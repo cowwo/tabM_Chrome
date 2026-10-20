@@ -342,6 +342,7 @@ export default function App() {
                   key={size}
                   type="button"
                   role="radio"
+                  data-testid={`display-size-${size}`}
                   aria-checked={settings.display.tabDisplaySize === size}
                   className={`seg__btn${settings.display.tabDisplaySize === size ? " seg__btn--on" : ""}`}
                   onClick={() => {

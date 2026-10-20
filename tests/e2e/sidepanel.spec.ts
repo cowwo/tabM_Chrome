@@ -2,6 +2,7 @@ import { expect, type BrowserContext, type Page } from "@playwright/test";
 import type { TabRecord } from "../../src/shared";
 import { openSidepanelPage, type SidepanelApi } from "./helpers/sidepanel";
 import { test } from "./fixtures";
+import { ensureRowRendered, scrollListTo, waitForListLayoutStable } from "./helpers/virtualList";
 
 type Snapshot = Awaited<ReturnType<SidepanelApi["getSnapshot"]>>;
 
@@ -45,7 +46,8 @@ async function setHoveredTabPreviewEnabled(
     timeout: 10_000
   });
 
-  const previewToggle = optionsPage.getByLabel("Show hovered tab preview");
+  // 用控件 id 而不是标签文案，避免用例依赖 options 页当前语言
+  const previewToggle = optionsPage.locator("#hovered-tab-preview-enabled");
   if (enabled) {
     await previewToggle.click({ force: true });
   } else {
@@ -723,11 +725,11 @@ test("无重复标签时选择重复标签显示提示后自动消失", async ({
   await sidepanelPage.bringToFront();
   await sidepanelPage.getByRole("button", { name: "选择重复标签" }).click();
 
-  // Toast should appear
-  await expect(sidepanelPage.getByText("没有发现重复标签页")).toBeVisible();
+  // Toast should appear（实际文案见 messages.ts 的 sidepanel.toast.noDuplicates）
+  await expect(sidepanelPage.getByText("未发现重复标签")).toBeVisible();
 
   // Toast should auto-dismiss
-  await expect(sidepanelPage.getByText("没有发现重复标签页")).toHaveCount(0, { timeout: 5_000 });
+  await expect(sidepanelPage.getByText("未发现重复标签")).toHaveCount(0, { timeout: 5_000 });
 });
 
 // ---------------------------------------------------------------------------
@@ -771,8 +773,9 @@ test("搜索：过滤模式隐藏不匹配标签，高亮模式保留全部标�
   // Match count
   await expect(sidepanelPage.getByText("1 个匹配").first()).toBeVisible();
 
-  // Toggle to highlight mode
-  await sidepanelPage.getByRole("button", { name: "高亮模式" }).click();
+  // Toggle to highlight mode：该按钮的 aria-label 是"当前模式"（过滤模式↔高亮模式），
+  // 按目标文案点会永远找不到元素，所以用 testid 按控件定位。
+  await sidepanelPage.getByTestId("search-filter-mode-toggle").click();
   await expect(sidepanelPage.getByRole("treeitem", { name: `切换到标签页 ${noMatchTitle}` })).toBeVisible();
 
   // Clear search
@@ -936,10 +939,9 @@ test("固定标签后侧边栏状态更新", async ({ extensionContext, sidepane
   await expect(tabRow).toBeVisible({ timeout: 5_000 });
   await tabRow.hover();
 
-  const pinButton = sidepanelPage.getByRole("button", { name: "固定标签" });
-  if (await pinButton.isVisible()) {
-    await pinButton.click();
-  }
+  // 每一行都有一个"固定标签"按钮，必须限定到目标行内，否则 strict mode 命中多个
+  const pinButton = tabRow.getByRole("button", { name: "固定标签" }).first();
+  await pinButton.click();
 
   await waitForSnapshot(
     sidepanelApi,
@@ -1082,7 +1084,7 @@ test("开启详细日志后点击激活标签不会产生 move 事件", async ({
   );
 
   await optionsPage.bringToFront();
-  await optionsPage.getByLabel("开启详细日志").click({ force: true });
+  await optionsPage.locator("#debug-verbose-logging").click({ force: true });
   await sidepanelPage.bringToFront();
   await expect(sidepanelPage.getByText("详细日志记录中")).toBeVisible();
 
@@ -1224,27 +1226,28 @@ test("pointer drag 在顶部热区自动滚动后仍可完成移动", async ({ e
   await expect(searchInput).toBeVisible({ timeout: 10_000 });
   await searchInput.fill(uniqueSuffix);
 
+  // 虚拟滚动：用 helper 确保"最后一行"已渲染，而不是依赖全量 DOM。
   const scrollContainer = sidepanelPage.locator(".panel-scroll");
-  await scrollContainer.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-  });
+  await scrollListTo(sidepanelPage, "bottom");
 
-  const filteredRows = sidepanelPage.locator(".tab-row button[role='treeitem']");
-  const sourceRow = filteredRows.last();
-  await expect(sourceRow).toBeVisible();
-
-  const sourceTitle = await sourceRow.locator(".tab-row__title").innerText();
   const beforeSnapshot = await sidepanelApi.getSnapshot();
-  const sourceTab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === sourceTitle);
-  expect(sourceTab).toBeDefined();
+  const filteredTabs = getSnapshotTabs(beforeSnapshot)
+    .filter((tab) => tab.title?.includes("drag-auto-scroll-") && tab.title?.includes(uniqueSuffix))
+    .sort((left, right) => left.index - right.index);
+  expect(filteredTabs).toHaveLength(tabCount);
 
+  const sourceTab = filteredTabs[filteredTabs.length - 1]!;
+  const targetTab = filteredTabs[2]!;
+  expect(targetTab.id).not.toBe(sourceTab.id);
+
+  const sourceRow = await ensureRowRendered(sidepanelPage, { tabId: sourceTab.id });
   const sourceBox = await sourceRow.boundingBox();
   const scrollBox = await scrollContainer.boundingBox();
   expect(sourceBox).not.toBeNull();
   expect(scrollBox).not.toBeNull();
 
   const initialScrollTop = await scrollContainer.evaluate((element) => element.scrollTop);
-  expect(initialScrollTop).toBeGreaterThan(0);
+  expect(initialScrollTop).toBeGreaterThan(40);
 
   const hotZoneX = scrollBox!.x + Math.min(scrollBox!.width / 2, 80);
   const hotZoneY = scrollBox!.y + 2;
@@ -1253,47 +1256,48 @@ test("pointer drag 在顶部热区自动滚动后仍可完成移动", async ({ e
   await sidepanelPage.mouse.down();
   await sidepanelPage.mouse.move(hotZoneX, hotZoneY, { steps: 16 });
 
+  // 顶部热区必须真的触发自动向上滚动。
   await expect
     .poll(async () => scrollContainer.evaluate((element) => element.scrollTop), { timeout: 10_000 })
     .toBeLessThan(initialScrollTop - 40);
 
+  // 先移出热区停止自动滚动，再把目标行滚到视口中央：
+  // 落点固定在目标行 75% 高度（目标行在中央 => 不会落回热区，避免 drop 目标随机竞态）。
   const neutralX = scrollBox!.x + scrollBox!.width / 2;
   const neutralY = scrollBox!.y + scrollBox!.height / 2;
   await sidepanelPage.mouse.move(neutralX, neutralY, { steps: 8 });
 
-  const targetRow = filteredRows.nth(2);
-  await expect(targetRow).toBeVisible();
-
-  const targetTitle = await targetRow.locator(".tab-row__title").innerText();
-  const targetTab = getSnapshotTabs(beforeSnapshot).find((tab) => tab.title === targetTitle);
-  expect(targetTab).toBeDefined();
-  expect(targetTab!.id).not.toBe(sourceTab!.id);
+  const targetRow = await ensureRowRendered(sidepanelPage, { tabId: targetTab.id });
+  await waitForListLayoutStable(sidepanelPage);
 
   const targetBox = await targetRow.boundingBox();
   expect(targetBox).not.toBeNull();
 
   const dropX = targetBox!.x + 24;
   const dropY = targetBox!.y + targetBox!.height * 0.75;
+  // 落点必须离开顶部热区（约 60px），否则松手前的自动滚动会改写 drop 目标。
+  expect(dropY).toBeGreaterThan(scrollBox!.y + 120);
 
   await sidepanelPage.mouse.move(dropX, dropY, { steps: 8 });
   await sidepanelPage.mouse.up();
 
+  // 落在目标行下半区 => 插到目标行之后：source 到 target.index+1，target 留在原 index。
   await expect
     .poll(async () => {
       const snapshot = await sidepanelApi.getSnapshot();
-      const windowTabIds = snapshot.windowTabIds[targetTab!.windowId] ?? [];
+      const windowTabIds = snapshot.windowTabIds[targetTab.windowId] ?? [];
       return {
-        sourceIndex: snapshot.tabsById[sourceTab!.id]?.index ?? null,
-        targetIndex: snapshot.tabsById[targetTab!.id]?.index ?? null,
-        tabAtTargetIndex: windowTabIds[targetTab!.index] ?? null,
-        tabAfterTargetIndex: windowTabIds[targetTab!.index + 1] ?? null
+        sourceIndex: snapshot.tabsById[sourceTab.id]?.index ?? null,
+        targetIndex: snapshot.tabsById[targetTab.id]?.index ?? null,
+        tabAtTargetIndex: windowTabIds[targetTab.index] ?? null,
+        tabAfterTargetIndex: windowTabIds[targetTab.index + 1] ?? null
       };
     })
     .toEqual({
-      sourceIndex: targetTab!.index,
-      targetIndex: targetTab!.index + 1,
-      tabAtTargetIndex: sourceTab!.id,
-      tabAfterTargetIndex: targetTab!.id
+      sourceIndex: targetTab.index + 1,
+      targetIndex: targetTab.index,
+      tabAtTargetIndex: targetTab.id,
+      tabAfterTargetIndex: sourceTab.id
     });
 
   await Promise.all(pages.map((page) => page.close()));

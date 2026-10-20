@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test";
 import { test } from "./fixtures";
+import { setLocale } from "./helpers/locale";
 import { openSidepanelPage } from "./helpers/sidepanel";
 
 test("options 页面切换到 English 后立即影响侧边栏", async ({ extensionContext, sidepanelPage }) => {
@@ -11,8 +12,7 @@ test("options 页面切换到 English 后立即影响侧边栏", async ({ extens
     timeout: 10_000
   });
 
-  await optionsPage.selectOption("#locale-mode", "en");
-  await expect(optionsPage).toHaveTitle("Settings");
+  await setLocale(optionsPage, "en");
   await expect(optionsPage.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(optionsPage.getByLabel("Show number badge on the toolbar icon")).toBeVisible();
   await expect(optionsPage.getByLabel("Show hovered tab preview")).toBeVisible();
@@ -57,7 +57,7 @@ test("开启悬浮标签预览后侧边栏顶部显示标题和 URL，关闭后�
   await tabRow.hover();
   await expect(hoveredPreview).toHaveCount(0);
 
-  await optionsPage.getByLabel("Show hovered tab preview").click({ force: true });
+  await optionsPage.locator("#hovered-tab-preview-enabled").click({ force: true });
 
   await sidepanelPage.reload({ waitUntil: "domcontentloaded" });
   await sidepanelPage.bringToFront();
@@ -65,7 +65,7 @@ test("开启悬浮标签预览后侧边栏顶部显示标题和 URL，关闭后�
   await expect(hoveredPreview).toContainText(targetTitle);
 
   await optionsPage.bringToFront();
-  await optionsPage.getByLabel("Show hovered tab preview").click({ force: true });
+  await optionsPage.locator("#hovered-tab-preview-enabled").click({ force: true });
 
   await sidepanelPage.reload({ waitUntil: "domcontentloaded" });
   await expect(hoveredPreview).toHaveCount(0);
@@ -112,7 +112,7 @@ test("标签显示尺寸设置保存到存储", async ({ extensionContext }) => 
   });
 
   // Click "Small" radio and verify
-  const smallRadio = optionsPage.getByRole("radio", { name: "Small" });
+  const smallRadio = optionsPage.getByTestId("display-size-small");
   await smallRadio.click();
   await expect(smallRadio).toBeChecked();
 
@@ -124,7 +124,7 @@ test("标签显示尺寸设置保存到存储", async ({ extensionContext }) => 
   expect(storageSize?.tabDisplaySize).toBe("small");
 
   // Click "Large" and verify
-  const largeRadio = optionsPage.getByRole("radio", { name: "Large" });
+  const largeRadio = optionsPage.getByTestId("display-size-large");
   await largeRadio.click();
   await expect(largeRadio).toBeChecked();
 
@@ -145,6 +145,8 @@ test("详细日志开关控制侧边栏调试横幅", async ({ extensionContext,
     waitUntil: "domcontentloaded",
     timeout: 10_000
   });
+
+  await setLocale(optionsPage, "zh-CN");
 
   // Wait for trace state to load (checkbox becomes enabled)
   const verboseCheckbox = optionsPage.locator("#debug-verbose-logging");
@@ -176,6 +178,8 @@ test("导出日志按钮可点击且无崩溃", async ({ extensionContext }) => 
     timeout: 10_000
   });
 
+  await setLocale(optionsPage, "zh-CN");
+
   // Wait for trace state to load
   const verboseCheckbox = optionsPage.locator("#debug-verbose-logging");
   await expect(verboseCheckbox).not.toBeDisabled({ timeout: 10_000 });
@@ -197,10 +201,12 @@ test("清空日志后日志条目归零", async ({ extensionContext }) => {
     timeout: 10_000
   });
 
+  await setLocale(optionsPage, "zh-CN");
+
   // Wait for trace state, clear, verify 0
   await expect(optionsPage.locator("#debug-verbose-logging")).not.toBeDisabled({ timeout: 10_000 });
   await optionsPage.getByRole("button", { name: "清空日志" }).click();
-  await expect(optionsPage.getByText("条目数：0")).toBeVisible();
+  await expect(optionsPage.getByText("记录条数：0")).toBeVisible();
 
   await optionsPage.close();
 });
@@ -213,9 +219,8 @@ test("恢复默认设置后设置重置", async ({ extensionContext }) => {
     timeout: 10_000
   });
 
-  // Switch to English to change a setting
-  await optionsPage.selectOption("#locale-mode", "en");
-  await expect(optionsPage).toHaveTitle("Settings");
+  // Switch to English to change a setting（显式锁语言，不依赖浏览器系统语言）
+  await setLocale(optionsPage, "en");
 
   // Also change badge setting
   const badgeCheckbox = optionsPage.locator("#badge-enabled");
@@ -226,8 +231,8 @@ test("恢复默认设置后设置重置", async ({ extensionContext }) => {
   await expect(resetBtn).toBeVisible();
   await resetBtn.click();
 
-  // After reset, locale should be back to "auto" and badge enabled
-  await expect(optionsPage.locator("#locale-mode")).toHaveValue("auto");
+  // After reset, locale should be back to "system" and badge enabled
+  await expect(optionsPage.locator("#locale-mode")).toHaveValue("system");
   await expect(badgeCheckbox).toBeChecked();
 
   await optionsPage.close();
