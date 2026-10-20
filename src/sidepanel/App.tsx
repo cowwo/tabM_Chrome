@@ -15,7 +15,10 @@ import {
   mergeExtensionSettings
 } from "../shared/settings";
 import type { ExtensionSettingsRecord, SearchFilterMode, SupportedLocale, TabCommand, TabRecord } from "../shared/types";
-import { VirtualizedWindowList } from "./components/VirtualizedWindowList";
+import {
+  VirtualizedWindowList,
+  type VirtualListImperativeHandle
+} from "./components/VirtualizedWindowList";
 import type { HoveredTabPreview } from "./components/listRows";
 import { createPanelCommandActions } from "./panelCommands";
 import { SearchBar, focusSearchInput } from "./SearchBar";
@@ -63,6 +66,7 @@ export default function App() {
   const [filterMode, setFilterMode] = useState<SearchFilterMode>("filter");
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const panelScrollRef = useRef<HTMLDivElement | null>(null);
+  const listImperativeRef = useRef<VirtualListImperativeHandle | null>(null);
   const commandActions = useMemo(() => createPanelCommandActions(dispatchCommand), [dispatchCommand]);
 
   const handleHoveredTabChange = useCallback((preview: HoveredTabPreview | null) => {
@@ -226,7 +230,18 @@ export default function App() {
 
 
   useEffect(() => {
-    const api: NonNullable<typeof window.__playwrightApi> = {
+    // E2E 只读观测/确定性滚动：window.d.ts 由其他写域维护，这里用交叉类型扩展，
+    // 运行时挂在 window.__playwrightApi 上（仅 E2E 构建注入）。
+    const api: NonNullable<typeof window.__playwrightApi> & {
+      getListState: () => {
+        totalRowCount: number;
+        renderedRowCount: number;
+        scrollTop: number;
+        scrollHeight: number;
+        clientHeight: number;
+      };
+      scrollToRow: (options: { rowKey: string } | string) => boolean;
+    } = {
       getSnapshot: () => Promise.resolve(snapshot),
       dispatchCommand: (command: TabCommand) => {
         dispatchCommand(command);
@@ -242,12 +257,31 @@ export default function App() {
         }
         throw new Error("Sidepanel did not become interactive within 10 seconds");
       },
-      closeSidepanel: () => window.close()
+      closeSidepanel: () => window.close(),
+      getListState: () => {
+        const container = panelScrollRef.current;
+        const listElement = container?.querySelector<HTMLElement>(".virtual-list") ?? null;
+        return {
+          totalRowCount: filteredRows.length,
+          renderedRowCount: listElement?.querySelectorAll(".stack-list__item").length ?? 0,
+          scrollTop: container?.scrollTop ?? 0,
+          scrollHeight: container?.scrollHeight ?? 0,
+          clientHeight: container?.clientHeight ?? 0
+        };
+      },
+      scrollToRow: (options: { rowKey: string } | string) => {
+        const rowKey = typeof options === "string" ? options : options?.rowKey;
+        if (!rowKey) {
+          return false;
+        }
+
+        return listImperativeRef.current?.scrollToRowKey(rowKey) ?? false;
+      }
     };
     if (!import.meta.env.PROD || import.meta.env.VITE_E2E_TEST === "true") {
       window.__playwrightApi = api;
     }
-  }, [dispatchCommand, panelController.isInteractive, snapshot]);
+  }, [dispatchCommand, filteredRows, panelController.isInteractive, snapshot]);
 
   const liveActiveTab = useMemo<TabRecord | null>(
     () => (liveActiveTabId == null ? null : snapshot.tabsById[liveActiveTabId] ?? null),
@@ -590,6 +624,7 @@ export default function App() {
             closingTabIds={closingTabIdSet}
             selectedTabIds={selectedTabIdSet}
             scrollContainerRef={panelScrollRef}
+            imperativeRef={listImperativeRef}
             disabled={listDisabled}
             searchActive={searchActive}
             onHoveredTabChange={hoveredTabPreviewEnabled ? handleHoveredTabChange : undefined}

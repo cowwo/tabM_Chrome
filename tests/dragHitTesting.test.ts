@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { PanelRow } from "../src/shared/types";
 import type { DropTarget, DragSource } from "../src/sidepanel/components/listDrag";
 import {
+  collectRenderedDragRows,
+  createDragHitTestIndex,
   findClosestDropTarget,
+  findClosestDropTargetInIndex,
+  findNearestDragEntryIndex,
+  isDragHitTestCacheValid,
   type DragHitTestRow,
   type PointerPosition
 } from "../src/sidepanel/components/dragHitTesting";
@@ -513,5 +519,174 @@ describe("dragHitTesting", () => {
       targetGroupId: 9,
       indicator: "after"
     } satisfies DropTarget);
+  });
+});
+
+// ── 缓存索引 + 二分命中（拖拽热路径） ────────────────────────────────
+
+function makeRect(top: number, height: number): DOMRect {
+  return {
+    top,
+    bottom: top + height,
+    left: 0,
+    right: 200,
+    height,
+    width: 200,
+    x: 0,
+    y: top,
+    toJSON: () => ({})
+  } as DOMRect;
+}
+
+function makeTabHitRow(id: number, index: number, top: number, height = 38): DragHitTestRow {
+  return {
+    row: {
+      kind: "tab",
+      key: `tab-${id}`,
+      windowId: 1,
+      tab: {
+        id,
+        windowId: 1,
+        index,
+        groupId: -1,
+        title: `Tab ${id}`,
+        url: "https://example.com",
+        pinned: false,
+        active: false,
+        audible: false,
+        discarded: false,
+        favIconUrl: null,
+        lastAccessed: 0
+      }
+    },
+    rect: makeRect(top, height),
+    level: 0
+  };
+}
+
+describe("dragHitTesting index cache", () => {
+  const tabSource: DragSource = {
+    kind: "tab",
+    rowKey: "tab-1",
+    tabId: 1,
+    windowId: 1,
+    index: 0,
+    groupId: null
+  };
+
+  it("sorts entries by rect top when building the index", () => {
+    const rows = [makeTabHitRow(3, 2, 80), makeTabHitRow(2, 1, 40), makeTabHitRow(1, 0, 0)];
+    const index = createDragHitTestIndex(rows);
+
+    expect(index.entries.map((entry) => entry.row.kind === "tab" ? entry.row.tab.id : 0)).toEqual([1, 2, 3]);
+  });
+
+  it("binary-searches the nearest entry above, inside and below the list", () => {
+    const index = createDragHitTestIndex([
+      makeTabHitRow(1, 0, 0, 40),
+      makeTabHitRow(2, 1, 44, 40),
+      makeTabHitRow(3, 2, 88, 40)
+    ]);
+
+    expect(findNearestDragEntryIndex(index.entries, -100)).toBe(0);
+    expect(findNearestDragEntryIndex(index.entries, 0)).toBe(0);
+    expect(findNearestDragEntryIndex(index.entries, 46)).toBe(1);
+    expect(findNearestDragEntryIndex(index.entries, 200)).toBe(2);
+    expect(findNearestDragEntryIndex([], 10)).toBe(-1);
+  });
+
+  it("matches the legacy sort-based hit test for sorted rows", () => {
+    const rows = [
+      makeTabHitRow(1, 0, 0, 40),
+      makeTabHitRow(2, 1, 44, 40),
+      makeTabHitRow(3, 2, 88, 40)
+    ];
+    const index = createDragHitTestIndex(rows);
+
+    for (let clientY = -20; clientY <= 150; clientY += 3) {
+      const pointer = makePointerPosition({ clientY });
+      expect(
+        findClosestDropTargetInIndex({ source: tabSource, pointer, index })
+      ).toEqual(
+        findClosestDropTarget({ source: tabSource, pointer, rows })
+      );
+    }
+  });
+
+  it("validates the cached rect index against scroll/rows/layout revisions", () => {
+    const index = createDragHitTestIndex([makeTabHitRow(1, 0, 0)]);
+
+    expect(
+      isDragHitTestCacheValid({
+        cache: null,
+        scrollTop: 0,
+        rowsRevision: 1,
+        layoutRevision: 1
+      })
+    ).toBe(false);
+
+    expect(
+      isDragHitTestCacheValid({
+        cache: { index, scrollTop: 12, rowsRevision: 3, layoutRevision: 4 },
+        scrollTop: 12,
+        rowsRevision: 3,
+        layoutRevision: 4
+      })
+    ).toBe(true);
+
+    // 滚动后失效
+    expect(
+      isDragHitTestCacheValid({
+        cache: { index, scrollTop: 12, rowsRevision: 3, layoutRevision: 4 },
+        scrollTop: 13,
+        rowsRevision: 3,
+        layoutRevision: 4
+      })
+    ).toBe(false);
+
+    // 行集合变化后失效
+    expect(
+      isDragHitTestCacheValid({
+        cache: { index, scrollTop: 12, rowsRevision: 3, layoutRevision: 4 },
+        scrollTop: 12,
+        rowsRevision: 4,
+        layoutRevision: 4
+      })
+    ).toBe(false);
+
+    // 折叠/布局变化后失效
+    expect(
+      isDragHitTestCacheValid({
+        cache: { index, scrollTop: 12, rowsRevision: 3, layoutRevision: 4 },
+        scrollTop: 12,
+        rowsRevision: 3,
+        layoutRevision: 5
+      })
+    ).toBe(false);
+  });
+
+  it("collects only mounted rows and ignores unknown row keys", () => {
+    const mountedRow = makeTabHitRow(1, 0, 0);
+    const rowByKey = new Map<string, PanelRow>([[mountedRow.row.key, mountedRow.row]]);
+    const rowRefs = new Map<string, HTMLElement>([
+      [
+        mountedRow.row.key,
+        {
+          getBoundingClientRect: () => makeRect(24, 38)
+        } as unknown as HTMLElement
+      ],
+      [
+        "tab-removed",
+        {
+          getBoundingClientRect: () => makeRect(100, 38)
+        } as unknown as HTMLElement
+      ]
+    ]);
+
+    const entries = collectRenderedDragRows({ rowRefs, rowByKey });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.row.key).toBe("tab-1");
+    expect(entries[0]!.rect.top).toBe(24);
   });
 });

@@ -520,6 +520,8 @@ button:focus-visible {
 .virtual-list {
   min-height: 100%;
   min-width: 0;
+  /* 虚拟滚动自行管理位置：禁用浏览器 scroll anchoring，避免 spacer 换挡时二次修正 */
+  overflow-anchor: none;
 }
 
 .virtual-list--large {
@@ -539,6 +541,7 @@ button:focus-visible {
   --tab-row-favicon-placeholder-radius: 5px;
   --tab-row-title-font-size: 18px;
   --stack-item-intrinsic-size: 40px;
+  --group-header-intrinsic-size: 34px;
 }
 
 .virtual-list--medium {
@@ -558,6 +561,7 @@ button:focus-visible {
   --tab-row-favicon-placeholder-radius: 4px;
   --tab-row-title-font-size: 16px;
   --stack-item-intrinsic-size: 38px;
+  --group-header-intrinsic-size: 28px;
 }
 
 .virtual-list--small {
@@ -577,12 +581,14 @@ button:focus-visible {
   --tab-row-favicon-placeholder-radius: 4px;
   --tab-row-title-font-size: 14px;
   --stack-item-intrinsic-size: 30px;
+  --group-header-intrinsic-size: 25px;
 }
 
 .stack-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  /* 虚拟列表用显式 spacer 表达 section 间距，grid gap 置 0 以免与 spacer 重复计数 */
+  gap: 0;
   min-width: 0;
 }
 
@@ -628,6 +634,12 @@ button:focus-visible {
 }
 
 .stack-list__bottom-spacer {
+  min-width: 0;
+  pointer-events: none;
+}
+
+/* 虚拟滚动的占位 spacer：不参与行选择器（E2E 用 .stack-list__item 数渲染行） */
+.stack-list__virtual-spacer {
   min-width: 0;
   pointer-events: none;
 }
@@ -897,9 +909,10 @@ button:focus-visible {
   contain-intrinsic-size: auto;
 }
 
-.group-block__item {
-  content-visibility: visible;
-  contain-intrinsic-size: auto;
+/* 组内行继承 .stack-list__item 的 content-visibility:auto；
+   占位高度用 --group-header-intrinsic-size 对齐实测行高，避免滚动时高度跳变。 */
+.group-block > .stack-list__item:first-child {
+  contain-intrinsic-size: var(--group-header-intrinsic-size, 34px);
 }
 
 .group-block__body .tab-row--grouped-current-active::before {
