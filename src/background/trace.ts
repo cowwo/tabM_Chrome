@@ -63,6 +63,14 @@ export function traceBackgroundEvent(
     category?: string;
   } = {}
 ): void {
+  if (
+    !traceSettings.verboseLoggingEnabled &&
+    !isCriticalTraceEvent(event) &&
+    inferTraceLevel(event) !== "error"
+  ) {
+    return;
+  }
+
   appendTraceEntry({
     event,
     details,

@@ -538,6 +538,7 @@ button:focus-visible {
   --tab-row-favicon-size: 22px;
   --tab-row-favicon-placeholder-radius: 5px;
   --tab-row-title-font-size: 18px;
+  --stack-item-intrinsic-size: 40px;
 }
 
 .virtual-list--medium {
@@ -556,6 +557,7 @@ button:focus-visible {
   --tab-row-favicon-size: 20px;
   --tab-row-favicon-placeholder-radius: 4px;
   --tab-row-title-font-size: 16px;
+  --stack-item-intrinsic-size: 38px;
 }
 
 .virtual-list--small {
@@ -574,6 +576,7 @@ button:focus-visible {
   --tab-row-favicon-size: 16px;
   --tab-row-favicon-placeholder-radius: 4px;
   --tab-row-title-font-size: 14px;
+  --stack-item-intrinsic-size: 30px;
 }
 
 .stack-list {
@@ -586,7 +589,7 @@ button:focus-visible {
 .stack-list__item {
   position: relative;
   content-visibility: auto;
-  contain-intrinsic-size: 44px;
+  contain-intrinsic-size: var(--stack-item-intrinsic-size, 44px);
   min-width: 0;
 }
 

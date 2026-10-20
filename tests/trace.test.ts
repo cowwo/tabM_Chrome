@@ -64,6 +64,49 @@ describe("trace", () => {
     expect(bundle.entries.some((entry) => entry.event === "panel/search-updated")).toBe(true);
   });
 
+  it("records background events only when verbose logging is enabled", async () => {
+    traceBackgroundEvent("bg/test-event", {
+      foo: "bar"
+    });
+
+    let bundle = await buildTraceExportBundle();
+    expect(bundle.entries.some((entry) => entry.event === "bg/test-event")).toBe(false);
+
+    await setVerboseLoggingEnabled(true);
+    traceBackgroundEvent("bg/test-event", {
+      foo: "bar"
+    });
+
+    bundle = await buildTraceExportBundle();
+    expect(bundle.entries.some((entry) => entry.event === "bg/test-event")).toBe(true);
+  });
+
+  it("records critical background events even when verbose logging is disabled", async () => {
+    traceBackgroundEvent("syncWindow/error", {
+      windowId: 3,
+      message: "query failed"
+    });
+    traceBackgroundEvent("command/error", {
+      commandType: "tab/activate"
+    });
+
+    const bundle = await buildTraceExportBundle();
+    const recordedEvents = bundle.entries
+      .filter((entry) => entry.source === "background")
+      .map((entry) => entry.event);
+    expect(recordedEvents).toContain("syncWindow/error");
+    expect(recordedEvents).toContain("command/error");
+  });
+
+  it("records inferred error-level background events even when verbose logging is disabled", async () => {
+    traceBackgroundEvent("panel/send-snapshot-error", {
+      message: "boom"
+    });
+
+    const bundle = await buildTraceExportBundle();
+    expect(bundle.entries.some((entry) => entry.event === "panel/send-snapshot-error")).toBe(true);
+  });
+
   it("keeps settings after clearing entries", async () => {
     await setVerboseLoggingEnabled(true);
     traceBackgroundEvent("bg/test-event", {
